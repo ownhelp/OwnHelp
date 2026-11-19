@@ -1,6 +1,15 @@
+// HTTP client for the gateway: `streamChat` (POST /api/chat, SSE with a JSON fallback) and
+// `submitContact` (POST /api/chat/contact). Framework-free so it can be used without the React UI.
+// The wire format is specified in widget/API_CONTRACT.md.
 import { normalizeFollowUp } from "./followUp.js";
 import { createSseParser } from "./sse.js";
 
+/**
+ * Error thrown by this module. `code` is a stable gateway code (e.g. `rate_limited`,
+ * `origin_not_allowed`) or a client-side one: `network_error`, `timeout`, `aborted`,
+ * `stream_interrupted`, `stream_error`, `invalid_response`, or `http_<status>` when the error
+ * body had no code. `message` is for developers; show visitors `visitorMessage(error)` instead.
+ */
 export class ChatError extends Error {
     constructor(code, message, status, retryAfterSec) {
         super(message);
@@ -12,12 +21,15 @@ export class ChatError extends Error {
     }
 }
 
+/** Abort if no bytes arrive for this long. The gateway's `: ping` heartbeats keep slow models alive. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 30000;
 
 function chatUrl(apiUrl) {
     return `${String(apiUrl).replace(/\/+$/, "")}/api/chat`;
 }
 
+// Builds a ChatError from a non-2xx response using the contract's `{error: {code, message}}`
+// body; tolerates non-JSON bodies (e.g. a proxy's HTML error page) by falling back to `http_<status>`.
 async function readHttpError(response) {
     let code = `http_${response.status}`;
     let message = `Request failed (${response.status})`;
@@ -42,6 +54,17 @@ async function readHttpError(response) {
  *
  * Resolves with `{ answer, sessionId, followUp? }`; rejects with `ChatError`
  * (`code === "aborted"` when the caller cancels).
+ *
+ * @param {object} options
+ * @param {string} options.apiUrl Gateway base URL (a trailing slash is ignored).
+ * @param {string} options.tenantId Tenant to chat with.
+ * @param {string} options.message Visitor message (the gateway allows at most 2000 characters).
+ * @param {string} options.sessionId Visitor session id, see `getSessionId`.
+ * @param {AbortSignal} [options.signal] Cancels the request (rejects with code `aborted`).
+ * @param {(text: string) => void} [options.onToken] Called with each text delta as it arrives.
+ * @param {number} [options.idleTimeoutMs=30000] Max silence before rejecting with `timeout`; 0 disables.
+ * @param {typeof fetch} [options.fetchImpl] Replacement for `fetch`.
+ * @returns {Promise<{answer: string, sessionId: string, followUp?: object}>}
  */
 export async function streamChat({
     apiUrl,
@@ -57,6 +80,9 @@ export async function streamChat({
     let timedOut = false;
     let timer = null;
 
+    // Idle (not total) timeout: re-armed on every received chunk, so a long reply that keeps
+    // streaming is fine but a stalled connection is cut. `timedOut` lets `translate` tell this
+    // abort apart from a caller abort, since both surface as the same AbortError.
     const armTimer = () => {
         if (!idleTimeoutMs) {
             return;
@@ -127,6 +153,8 @@ export async function streamChat({
         let followUp;
         let streamError = null;
 
+        // Unknown events (e.g. a legacy `sources` event) are ignored on purpose so older or newer
+        // gateways stay compatible. `done` is mandatory: a stream that just closes is an error.
         const parser = createSseParser(({ event, data }) => {
             let payload = {};
             try {
@@ -187,7 +215,23 @@ export async function streamChat({
     }
 }
 
-/** Saves visitor contact details; success means persisted, never an email delivery. */
+/**
+ * Saves visitor contact details for staff follow-up via `POST {apiUrl}/api/chat/contact`;
+ * success means persisted, never an email delivery. Needs the `followUp.token` returned by
+ * `streamChat`. Resolves `{ status: "saved" }`; rejects with `ChatError` (`aborted`,
+ * `network_error`, `invalid_response`, or the gateway's error code).
+ *
+ * @param {object} options
+ * @param {string} options.apiUrl Gateway base URL.
+ * @param {string} options.tenantId Tenant the conversation belongs to.
+ * @param {string} options.sessionId Session id used for the conversation.
+ * @param {string} options.followUpToken `followUp.token` from the reply.
+ * @param {string} options.name Visitor name (trimmed before sending).
+ * @param {string} options.email Visitor email (trimmed before sending).
+ * @param {AbortSignal} [options.signal] Cancels the request.
+ * @param {typeof fetch} [options.fetchImpl] Replacement for `fetch`.
+ * @returns {Promise<{status: "saved"}>}
+ */
 export async function submitContact({ apiUrl, tenantId, sessionId, followUpToken, name, email, signal,
     fetchImpl = (...args) => fetch(...args) }) {
     try {

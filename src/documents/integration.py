@@ -2,6 +2,14 @@
 
 This module transforms representation only. It never changes source files,
 repairs policy claims, chooses benchmark answers, embeds, or contacts a service.
+
+Inputs: a tenant directory or a ``ParsedDocument``. Outputs: ordered document paths, parsed
+documents, a text rendering for data generation, and chunk dicts carrying provenance
+(``source_id``, ``source_sha256``, ``source_locator``, ``source_context``, ``source_block_index``,
+``parser_version``) that match the extra ``doc_vectors`` fields written by the ingestor.
+Callers: ``RAGDocumentIngestor`` (structured mode) and data-generation scripts. Using one module
+for both generation and retrieval keeps the text a question was generated from identical to the
+text that is later retrieved.
 """
 
 from pathlib import Path
@@ -14,7 +22,11 @@ PARSER_MODE_VERSION = "structured-v1"
 
 
 def discover_document_paths(root: Path, include_reference: bool = False) -> list[Path]:
-    """One eligibility/containment policy for every structured pipeline caller."""
+    """One eligibility/containment policy for every structured pipeline caller.
+
+    Skips dotfiles and ``generation_reference`` folders (answer-key material that must never be
+    retrievable unless explicitly included) and refuses symlinks that escape the root.
+    """
     root = Path(root).resolve()
     if not root.is_dir():
         raise ValueError("Source document root must be a directory")
@@ -32,6 +44,7 @@ def discover_document_paths(root: Path, include_reference: bool = False) -> list
 
 
 def load_documents(root: Path, include_reference: bool = False) -> dict[str, ParsedDocument]:
+    """Parses every eligible document, keyed by its path relative to ``root`` (posix style)."""
     root = Path(root).resolve()
     return {path.relative_to(root).as_posix(): parse_document(path, path.relative_to(root).as_posix())
             for path in discover_document_paths(root, include_reference)}

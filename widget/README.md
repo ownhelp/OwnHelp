@@ -1,30 +1,33 @@
-# selfhost-support-widget
+# @ownhelp/widget
 
-An embeddable chat widget for a self-hosted, multi-tenant support gateway. Visitors see only the
-assistant's reply. The widget talks to `POST {apiUrl}/api/chat` and nothing else: it never touches a
-database and holds no secrets.
+An embeddable chat widget for a self-hosted, multi-tenant support gateway. It talks only to
+`POST {apiUrl}/api/chat` (and `/api/chat/contact`): it never touches a database and holds no secrets.
+Visitors see the assistant's reply, never retrieved chunks or scores.
 
-## Option 1: script tag
+## Install: script tag
 
 ```html
 <script src="https://support.example.com/widget.js"
         data-tenant-id="your_tenant"
         data-api-url="https://support.example.com"
+        data-title="Example Support"
+        data-greeting="Hi! Ask me anything."
+        data-position="right"
+        data-accent-color="#0b6e4f"
         defer></script>
 ```
 
-The script can come from your gateway (`GET /widget.js`) or from a CDN:
+The script can come from your gateway (`/widget.js`) or a CDN. Pin an exact version on a CDN:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/selfhost-support-widget@0.1.0/dist/widget.js"
+<script src="https://cdn.jsdelivr.net/npm/@ownhelp/widget@0.1.0/dist/widget.js"
         data-tenant-id="your_tenant"
         data-api-url="https://support.example.com"
         defer></script>
 ```
 
-**`data-api-url` is required when the script is not served by the gateway.** If you leave it out, the
-widget uses the origin the script was loaded from, which is only correct for `/widget.js` served by
-the gateway itself. Pin an exact version on a CDN.
+`data-api-url` is required unless the gateway itself serves the script: when omitted, the widget
+uses the origin the script was loaded from.
 
 | Attribute | Required | Default | Notes |
 | :--- | :--- | :--- | :--- |
@@ -33,68 +36,76 @@ the gateway itself. Pin an exact version on a CDN.
 | `data-title` | no | `Support` | Header text. |
 | `data-greeting` | no | `Hi! How can I help you today?` | First message. |
 | `data-position` | no | `right` | `left` or `right`. |
-| `data-accent-color` | no | built in | Any CSS colour. |
+| `data-accent-color` | no | `#1f6feb` | Any CSS colour. |
 
-The widget renders in a shadow root, so your page's CSS cannot affect it.
+The widget renders inside a shadow root, so your page's CSS cannot affect it.
 
-## Option 2: React component
+## Install: React component
 
 ```bash
-npm install selfhost-support-widget
+npm install @ownhelp/widget
 ```
 
 ```jsx
-import { ChatWidget } from "selfhost-support-widget";
+import { ChatWidget } from "@ownhelp/widget";
 
 export default function App() {
-    return <ChatWidget apiUrl="https://support.example.com" tenantId="your_tenant" />;
+    return <ChatWidget apiUrl="https://support.example.com" tenantId="your_tenant" accentColor="#0b6e4f" />;
 }
 ```
 
-React 18 or newer is a peer dependency. The component injects its own styles and has no CSS import.
-The package also exports `streamChat`, `ChatError` and `getSessionId` for building your own UI, with
-TypeScript types included.
+Props: `apiUrl` and `tenantId` (required), `title`, `greeting`, `position` (`"left"` or `"right"`),
+`accentColor`, `defaultOpen` (start with the panel open) and `fetchImpl` (replace `fetch`, for tests
+or a custom proxy). React 18+ is a peer dependency; styles are injected, so there is no CSS import.
+The package also exports `streamChat`, `submitContact`, `ChatError`, `getSessionId` and
+`newSessionId` for building your own UI, with TypeScript types included.
 
 ## Gateway requirement: allowed origins
 
 The gateway only answers browsers whose origin is in that tenant's `widget_config.allowed_origins`
-(exact origins, no wildcards). Otherwise it returns `403 origin_not_allowed`, no matter where the
-script was loaded from. Add your site's origin, for example `https://shop.example.com`, to the
+(exact origins, no wildcards), whichever host served the script. Otherwise it returns
+`403 origin_not_allowed`. Add your site's origin (for example `https://shop.example.com`) to the
 tenant before going live.
 
-## Develop
+## Theming and behavior
+
+- **Theming:** set `accentColor`, or override the `--cw-*` custom properties on `.cw-root`
+  (`--cw-accent`, `--cw-bg`, `--cw-surface`, `--cw-text`, `--cw-muted`, `--cw-border`, `--cw-error`).
+  A dark palette applies automatically with `prefers-color-scheme: dark`.
+- **Session persistence:** each tenant gets a random session id in `localStorage` so a reload continues
+  the conversation on the server side. If storage is blocked (private window) it falls back to memory.
+  The id is not a credential.
+- **Email follow-up:** after a human escalation is saved, the gateway can include `follow_up`
+  metadata. The widget then shows optional public contact links and a name and email form, sent to
+  `/api/chat/contact`. The UI confirms details were saved for staff review, not that an email went out.
+  The follow-up token is kept in memory only.
+- **Start again:** the header's **New chat** button aborts in-flight requests, clears the form and
+  follow-up state, and stores a new session id. Server history and admin tickets are untouched.
+- Stop and Retry buttons, and fixed visitor-safe error messages, are built in.
+
+## Local development
 
 ```bash
 npm install
-npm run mock    # mock gateway on :4100, see API_CONTRACT.md
-npm run dev     # dev page on :5173
-npm test
+npm run mock    # mock gateway on :4100 (MOCK_PORT to change), see API_CONTRACT.md
+npm run dev     # Vite dev page on :5173
+npm test        # node --test tests/*.test.js
 npm run build   # dist/widget.js (script tag) and dist/lib/index.js (React import)
 ```
 
-`API_CONTRACT.md` documents the request and the stream events.
+In the mock, a message containing `human` returns follow-up metadata, `nostream` the JSON fallback,
+and `ratelimit`, `unknown`, `error`, `cutoff` and `slow` exercise failures (see the header of
+`mock/mock_gateway.js`). The mock saves nothing; use fictional data.
 
-## Publish
+## Publish checklist
 
-```bash
-npm pack --dry-run     # check the file list
-npm publish            # prepublishOnly runs the tests and the build
-```
+1. Bump `version` in `package.json` and update the pinned CDN version above.
+2. `npm test && npm run build` (also run by `prepublishOnly`).
+3. `npm pack --dry-run`: only `dist`, `types`, `README.md`, `LICENSE` and `API_CONTRACT.md` should ship.
+4. `npm publish --access public` (scoped packages are private by default, so the flag is required on
+   the first publish; `publishConfig` in `package.json` also sets it).
 
-## Email follow-up and starting again
+## Reference
 
-A saved escalation can expose an optional email-follow-up form (name and email) through
-`follow_up` response metadata. Details are submitted to the gateway's public
-`/api/chat/contact` endpoint and attached to that conversation's ticket. The UI confirms
-that details were saved, not that an email was sent or that a live agent was connected.
-Configured public contact links are shown with a warning that email is not immediate.
-
-The header's **New chat** button stops current requests, clears visitor contact fields
-and follow-up capabilities, and persists a fresh session ID for the tenant. It does not
-delete admin tickets. Blocked/private-window localStorage falls back to memory.
-
-For a local mock preview, run `npm run mock` and `npm run dev` in separate widget
-terminals. Send a message containing **human** to exercise follow-up; **human nostream**
-exercises JSON fallback. The mock returns synthetic contact options and accepts details
-without persisting or emailing them; use fictional data. The real gateway validates
-scoped capabilities and saves to the ticket. See [API_CONTRACT.md](API_CONTRACT.md).
+- [API_CONTRACT.md](API_CONTRACT.md): the `POST /api/chat` request, SSE events, errors and follow-up.
+- [LICENSE](LICENSE): MIT.

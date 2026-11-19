@@ -1,4 +1,4 @@
-"""Synthetic, tenant-independent checks for the shared source parser."""
+"""Protects the shared source parser: tables stay whole with their context, locators trace to the source, and oversized blocks are rejected rather than truncated (synthetic, tenant-independent)."""
 
 import hashlib
 import json

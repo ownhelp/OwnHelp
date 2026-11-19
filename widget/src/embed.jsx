@@ -1,3 +1,5 @@
+// Entry point of the self-mounting <script> build (dist/widget.js). It reads its own
+// data-* attributes, creates a host element with a shadow root and renders ChatWidget in it.
 import { createRoot } from "react-dom/client";
 import ChatWidget from "./components/ChatWidget.jsx";
 
@@ -28,6 +30,8 @@ function mount(script) {
 
     let apiUrl = script.dataset.apiUrl;
     if (!apiUrl) {
+        // Default to the origin that served the script: correct when the gateway itself serves
+        // /widget.js, wrong when the script comes from a CDN (then data-api-url is required).
         try {
             apiUrl = new URL(script.src).origin;
         } catch {

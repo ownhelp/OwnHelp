@@ -9,6 +9,12 @@ only retrieves tenant-scoped context and streams the model's answer.
 
 Binds to loopback by default. Set ``CHAT_BACKEND_TOKEN`` to require the same value in the
 ``X-Chat-Backend-Token`` header (use it whenever the service is reachable from another host).
+The token is compared in constant time (``hmac.compare_digest``). ``/health`` needs no token so
+container health checks work.
+
+Response format: one JSON event per line (NDJSON), see ``src/chat/orchestrator.py`` for event shapes.
+The gateway converts these into SSE (or a single JSON reply) for the widget. Callers: the Node
+gateway, and ``scripts/`` launchers that call ``serve``.
 """
 
 import hmac
@@ -30,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 def make_handler(orchestrator, token: str = ""):
+    """Builds the request handler class bound to an orchestrator and an optional shared token
+    (a factory because BaseHTTPRequestHandler is instantiated per request by the server)."""
     class ChatServiceHandler(BaseHTTPRequestHandler):
         def _send(self, status, content_type, body=None):
             self.send_response(status)
@@ -126,6 +134,7 @@ def server_selection_timeout_ms(env):
 
 
 def serve(host="127.0.0.1", port=8100, orchestrator=None):
+    """Runs the chat service until interrupted; ``orchestrator`` can be injected for tests."""
     load_env()  # before anything reads CHAT_BACKEND_TOKEN, MONGODB_*, OLLAMA_*, EMBEDDING_MODEL_NAME
     orchestrator = orchestrator or build_orchestrator()
     server = ThreadingHTTPServer((host, port), make_handler(orchestrator, os.getenv("CHAT_BACKEND_TOKEN", "")))

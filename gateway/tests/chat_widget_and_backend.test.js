@@ -1,3 +1,4 @@
+// Protects: GET /widget.js serving, the HTTP chat-backend client (NDJSON parsing, token header, failures), the rate limiter and agent_config normalization.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");

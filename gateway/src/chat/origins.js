@@ -5,6 +5,12 @@
  * as "https://shop.example.com"; no wildcards, no paths). A tenant without that field falls back to
  * WIDGET_DEFAULT_ALLOWED_ORIGINS, which has no built-in value: unset means every browser origin is
  * rejected. An explicitly empty array also allows no browser origin at all.
+ *
+ * Why: the chat endpoint is anonymous, so the Origin allowlist is what stops an arbitrary website
+ * embedding a tenant's assistant and consuming its model capacity. Origin is browser-set and
+ * unforgeable by page scripts, but non-browser clients can omit or fake it, which is why rate
+ * limits remain the real abuse control.
+ * Callers: routes/chat.js (check), routes/tenants.js (parseAllowedOrigins on admin writes).
  */
 
 const MAX_ALLOWED_ORIGINS = 50;

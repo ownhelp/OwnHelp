@@ -5,6 +5,26 @@ The model is decoded under a JSON schema, so its raw output looks like
 To stream only the human-readable answer to a visitor, ``AnswerStreamer.feed`` takes each
 text chunk as it arrives and returns the newly decoded characters of the ``answer`` value.
 Chunks may split the text anywhere, including inside an escape sequence or a surrogate pair.
+
+What is stripped: every other field (``cited_sources``, ``confidence``, ``action``) is parsed past
+and discarded, so only answer text could ever reach a visitor. Those fields are internal
+(escalation review) and must not leak.
+
+Inputs: raw JSON text fragments from the model. Output: decoded answer characters.
+
+TODO(streaming): this class is not yet used in production. Target: ``ChatOrchestrator.stream`` feeds
+model chunks through ``AnswerStreamer`` and emits many ``token`` events (the gateway's chat route and
+the widget's ``chatClient.js`` already handle repeated token events). The open problem is safety: the
+model returns structured JSON, so the answer must be extracted incrementally while the full reply is
+still validated against ``SupportResponse``, and the handoff safeguard / escalation decision must not
+leak into text already shown to the visitor, because streamed text cannot be retracted.
+
+Status: the current ``ChatOrchestrator.stream`` deliberately does NOT use this class. It buffers the
+whole JSON, validates it against ``SupportResponse`` and runs the handoff safeguard, then emits one
+``token`` event, because already-streamed unsafe text cannot be retracted. Only
+``tests/test_chat_service.py`` exercises it; it is kept for token-level streaming should the
+validation step ever move before display. The SSE framing seen by the widget is done by the Node
+gateway (``gateway/src/routes/chat.js``) from the orchestrator's NDJSON events, not here.
 """
 
 _WHITESPACE = " \t\r\n"
@@ -12,6 +32,8 @@ _SIMPLE_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\
 
 
 class AnswerStreamer:
+    """Small incremental JSON state machine that yields only the decoded value of one string field."""
+
     def __init__(self, field: str = "answer"):
         self.field = field
         self._state = "start"
@@ -30,6 +52,7 @@ class AnswerStreamer:
         self.answer_finished = False
 
     def feed(self, text: str) -> str:
+        """Consumes the next fragment and returns any newly decoded answer characters (maybe empty)."""
         out = []
         for char in text:
             self._step(char, out)
@@ -44,6 +67,7 @@ class AnswerStreamer:
             out.append(char)
 
     def _flush_high_surrogate(self, out: list) -> None:
+        # A lone high surrogate (no following low half) becomes U+FFFD instead of invalid text.
         if self._high_surrogate is not None:
             self._high_surrogate = None
             self._emit("�", out)

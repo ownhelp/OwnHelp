@@ -54,7 +54,7 @@ COPY data/kettle_and_loom /app/data/kettle_and_loom
 COPY data/northstar_auto /app/data/northstar_auto
 COPY --from=widget-build /widget/dist/widget.js /app/widget/dist/widget.js
 
-RUN mkdir -p /tmp/capstone_demo_uploads /app/logs /cache/huggingface
+RUN mkdir -p /tmp/ownhelp_demo_uploads /app/logs /cache/huggingface
 
 WORKDIR /app/gateway
 EXPOSE 4000

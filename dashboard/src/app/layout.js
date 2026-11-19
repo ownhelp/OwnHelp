@@ -1,3 +1,8 @@
+/**
+ * Root layout for every route. Wraps all pages in AuthProvider (session) > TenantProvider (active
+ * tenant, which depends on the session) > AppShell (route guard and sidebar). The order matters
+ * because TenantProvider calls useAuth().
+ */
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";

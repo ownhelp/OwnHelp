@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Overview route ("/"): document ingestion hub. Shows metrics for the active tenant, the upload
+ * dropzone, the document table and the paged chunk explorer. All data comes from src/lib/api.js
+ * (gateway), scoped to the active tenant, and is reloaded when the tenant changes.
+ */
+
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useTenant } from "@/context/TenantContext";
@@ -166,16 +172,18 @@ export default function IngestionHubPage() {
     }, [activeTenantId, chunkDocFilter, chunkSearch, chunkPage]);
 
     const handleUploadDocument = useCallback(
-        async ({ file, overwrite = true, docId = "" }) => {
+        async ({ file, overwrite = true, docId = "", onStage }) => {
             if (!activeTenantId) {
                 throw new Error("No active tenant selected.");
             }
 
+            // onStage is forwarded so the dropzone shows the gateway's real upload stages.
             const summary = await uploadTenantDocument({
                 file,
                 tenantId: activeTenantId,
                 overwrite,
                 docId,
+                onStage,
             });
 
             await refreshAllData(

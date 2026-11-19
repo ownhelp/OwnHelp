@@ -1,3 +1,16 @@
+/**
+ * Authentication routes, mounted at /api/auth in server.js as two routers:
+ * - publicAuthRouter    (before requireAuth): config, signup, login, demo-login
+ * - protectedAuthRouter (after requireAuth):  session, logout
+ *
+ * Why the split: the public routes are how a session is obtained, so they cannot require one;
+ * the protected pair needs req.auth. Signup/login exist only in standard mode and demo-login only
+ * in preset_training, so a deployment exposes exactly one way in. Every success sets the session
+ * cookie (middleware/auth.js); the raw token is never put in a response body.
+ *
+ * Input: JSON bodies. Output: JSON user/tenant profile plus the Set-Cookie header.
+ * Callers: the Next.js dashboard (login, signup, quick demo login, session bootstrap).
+ */
 const express = require("express");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
@@ -33,12 +46,18 @@ const DUMMY_BCRYPT_HASH = bcrypt.hashSync(
 
 const { validEmail } = require("../chat/followUp");
 
-// Bounded rate limiter for login attempts
+// Bounded rate limiter for login attempts. Only FAILED attempts count, keyed by IP plus email, so
+// an attacker cannot lock a real admin out from another address while the admin's own IP stays
+// unaffected. Per-process memory; the key map is capped so it cannot grow without bound.
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_LOGIN_ATTEMPTS = 8;
 const MAX_TRACKED_KEYS = 1000;
 const loginAttempts = new Map();
 
+// TODO(login-rate-limit-proxy): behind a reverse proxy req.ip is the proxy's address unless
+// TRUST_PROXY is set, so all clients share one rate-limit bucket per email. Document or enforce
+// TRUST_PROXY in standard mode, and drop the raw x-forwarded-for fallback below (a client can
+// send that header itself, so it must not decide the key).
 function getRateLimitKey(req, email) {
     const ip =
         req.ip ||
@@ -65,6 +84,8 @@ function checkLoginRateLimit(key) {
     return { allowed: true };
 }
 
+// TODO(gateway-cleanup): rename to maxLoginAttempts (typo "EMPTS", and it is a function, not a
+// constant) and update its single call site in checkLoginRateLimit.
 function MAX_LOGIN_EMPTS_LIMIT() {
     return Number(process.env.LOGIN_RATE_LIMIT_MAX) || MAX_LOGIN_ATTEMPTS;
 }
@@ -93,8 +114,10 @@ function resetLoginRateLimiter() {
 
 /**
  * GET /api/auth/config
+ * Auth: none. Response 200: { app_mode, demo_login_enabled, preset_tenants[] }.
  * Public endpoint exposing only the enabled server mode and public fixture metadata
  * when preset_training is enabled. Never exposes secrets, database names, or user records.
+ * A bad mode configuration degrades to the standard-mode answer instead of an error.
  */
 publicAuthRouter.get("/config", (req, res) => {
     try {
@@ -117,6 +140,8 @@ publicAuthRouter.get("/config", (req, res) => {
 
 /**
  * POST /api/auth/signup
+ * Auth: none; standard mode only (403 otherwise). Response 201 { app_mode, user, tenant,
+ * authorized_tenants } plus the session cookie; 400 validation, 409 duplicate or reserved id.
  * "Get to Know You" onboarding: validates admin credentials and business profile,
  * creates a unique non-preset tenant and linked admin user, and establishes an HttpOnly session.
  */
@@ -348,6 +373,10 @@ publicAuthRouter.post("/signup", async (req, res) => {
 
 /**
  * POST /api/auth/login
+ * Auth: none; standard mode only. Response 200 as signup plus a fresh session cookie; 400 missing
+ * fields, 401 bad credentials (one message for unknown email and wrong password), 429 throttled.
+ * A dummy bcrypt hash is compared when the email is unknown so response time does not reveal
+ * which emails exist.
  * Authenticates standard administrator credentials against admin_users.
  * Never accepts caller-supplied tenant_id as proof of membership and never discloses whether an email exists.
  */
@@ -453,6 +482,8 @@ publicAuthRouter.post("/login", async (req, res) => {
 
 /**
  * POST /api/auth/demo-login
+ * Auth: none (passwordless by design). Body { tenant_id }. Response 200 as login with a
+ * demo_preset session; 403 outside preset_training or for a non-preset tenant; 400 bad body.
  * Available ONLY in APP_MODE=preset_training.
  * Issues a normal expiring, revocable session for a server-defined demo principal
  * scoped strictly to the requested preset tenant. Revokes any previous session.
@@ -562,7 +593,8 @@ publicAuthRouter.post("/demo-login", async (req, res) => {
 
 /**
  * GET /api/auth/session
- * Requires valid session (protectedAuthRouter). Returns current user profile and authorized tenant.
+ * Auth: valid session cookie. Response 200 { authenticated, app_mode, user, tenant,
+ * authorized_tenants }; 401 if the tenant record is gone. Lets the dashboard restore state on load.
  */
 protectedAuthRouter.get("/session", async (req, res) => {
     try {
@@ -597,7 +629,8 @@ protectedAuthRouter.get("/session", async (req, res) => {
 
 /**
  * POST /api/auth/logout
- * Requires valid session (protectedAuthRouter). Revokes session in DB and clears cookie.
+ * Auth: valid session cookie. Response 200 { status: "logged_out" }. Revokes the session in the
+ * database (not just the cookie) so a copied token stops working.
  */
 protectedAuthRouter.post("/logout", async (req, res) => {
     try {

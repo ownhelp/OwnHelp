@@ -1,5 +1,5 @@
 {
-    "name": "selfhost-support-widget",
+    "name": "@ownhelp/widget",
     "version": "0.1.0",
     "type": "module",
     "description": "Embeddable chat widget for a self-hosted, multi-tenant support gateway. Use it as a <script> tag or as a React component.",
@@ -7,12 +7,12 @@
     "author": "Juan Cruz",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/CruzJua/capstone.git",
+        "url": "git+https://github.com/ownhelp/OwnHelp.git",
         "directory": "widget"
     },
-    "homepage": "https://github.com/CruzJua/capstone/tree/main/widget#readme",
+    "homepage": "https://github.com/ownhelp/OwnHelp/tree/main/widget#readme",
     "bugs": {
-        "url": "https://github.com/CruzJua/capstone/issues"
+        "url": "https://github.com/ownhelp/OwnHelp/issues"
     },
     "keywords": ["chat", "widget", "support", "customer-support", "react", "sse", "self-hosted"],
     "main": "./dist/lib/index.js",

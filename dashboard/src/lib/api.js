@@ -1,8 +1,19 @@
+/**
+ * The dashboard's only network client: every call goes to the Orchestration Gateway, never to
+ * MongoDB. Requests send credentials: "include" so the gateway's session cookie is used, and the
+ * X-Requested-With header (a custom header the gateway's CORS config allows). Tenant-scoped calls pass the tenant_id in
+ * the URL or form data; the gateway enforces that the session may access it.
+ */
+
+import { readUploadStream } from "./uploadStream.mjs";
+
+// NEXT_PUBLIC_ variables are inlined at build time, so changing the URL needs a rebuild.
 const GATEWAY_BASE_URL =
     process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:4000";
 
 let unauthorizedHandler = null;
 
+/** AuthContext registers a callback here so any 401 clears the local session state. */
 export function registerUnauthorizedHandler(handler) {
     unauthorizedHandler = typeof handler === "function" ? handler : null;
 }
@@ -24,6 +35,9 @@ function buildHeaders(extraHeaders = {}) {
     };
 }
 
+// Parses JSON and throws an Error carrying status and code on non-2xx. Auth and health calls pass
+// suppressUnauthorizedRedirect because a 401 there is an expected answer (not logged in), not an
+// expired session, and must not trigger the global sign-out handler.
 async function handleApiResponse(response, fallbackErrorMessage, { suppressUnauthorizedRedirect = false } = {}) {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -295,6 +309,7 @@ export async function uploadTenantDocument({
     tenantId,
     overwrite = true,
     docId = "",
+    onStage = null,
 }) {
     if (!file) {
         throw new Error("A file (.md or .json) is required.");
@@ -313,11 +328,19 @@ export async function uploadTenantDocument({
 
     const response = await fetch(`${GATEWAY_BASE_URL}/api/documents/upload`, {
         method: "POST",
-        headers: buildHeaders(),
+        // Ask for the NDJSON stage stream; an older gateway ignores this and answers with plain JSON.
+        headers: buildHeaders({ Accept: "application/x-ndjson, application/json" }),
         credentials: "include",
         body: formData,
     });
 
+    const contentType = response.headers.get("content-type") || "";
+    if (response.ok && contentType.includes("application/x-ndjson") && response.body) {
+        // Validation failures (4xx) are plain JSON and go through handleApiResponse below.
+        return readUploadStream(response.body.getReader(), onStage);
+    }
+    // Non-streaming gateway: the body arrives all at once, so the only honest status is generic.
+    if (response.ok && typeof onStage === "function") onStage("processing");
     return handleApiResponse(response, "Document upload failed");
 }
 

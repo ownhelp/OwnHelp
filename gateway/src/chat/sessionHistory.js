@@ -7,6 +7,11 @@
  * Two views of the same conversation:
  *   get()           the short recent window sent to the model as context
  *   getTranscript() the longer, timestamped record a human reviewer sees on an escalation ticket
+ *
+ * Why in memory and capped (1000 sessions, 30 minute idle TTL, 2000 chars per message): ordinary
+ * visitor chats are not stored, which limits privacy exposure, and an anonymous caller cannot grow
+ * memory without bound. Consequence: history is per process and lost on restart.
+ * Callers: routes/chat.js (one shared instance).
  */
 const MAX_CONTENT_LENGTH = 2000;
 const MAX_TRANSCRIPT_MESSAGES = 40;

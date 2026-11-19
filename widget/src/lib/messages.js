@@ -32,6 +32,8 @@ const BY_CODE = {
     origin_not_allowed: { message: "The support chat isn't available on this site.", retryable: false },
 };
 
+// Maps a ChatError to { message, retryable }. Unknown codes fall back on the HTTP status
+// (5xx retryable, 4xx not), and `rate_limited` builds its wait time from `Retry-After`.
 function describe(error) {
     const code = error && error.code;
     if (code === "rate_limited") {

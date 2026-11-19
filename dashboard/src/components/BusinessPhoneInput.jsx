@@ -1,5 +1,7 @@
 "use client";
 
+/** Country-select plus phone-number input used on the profile page for the public support phone. */
+
 import { useState } from "react";
 import PhoneNumberInput, { getCountries, getCountryCallingCode } from "react-phone-number-input/input";
 import countryNames from "react-phone-number-input/locale/en.json";
@@ -9,6 +11,8 @@ import styles from "./BusinessPhoneInput.module.css";
 const COUNTRIES = getCountries().sort((a, b) => countryNames[a].localeCompare(countryNames[b], "en"));
 
 /**
+ * Props: value (E.164 string or ""), onChange (receives the new string), onBlur, id, disabled; any
+ * other props pass through to the number input.
  * Controlled optional phone number in E.164 format (empty string when cleared).
  * Country selection is local presentation state; extensions remain in the separate field.
  * Native select retains keyboard navigation and platform mobile pickers without flag requests.

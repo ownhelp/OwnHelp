@@ -1,3 +1,4 @@
+// Protects the contract between the widget client and the mock gateway: SSE/JSON shapes, headers, error envelope, no sources leaked.
 import assert from "node:assert/strict";
 import test, { after, before } from "node:test";
 import { createMockApp } from "../mock/mock_gateway.js";

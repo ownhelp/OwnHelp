@@ -1,3 +1,5 @@
+// The chat UI component: launcher, panel, streaming replies, retry/stop, email follow-up form and
+// "New chat". All network access goes through lib/chatClient.js to the gateway's /api/chat.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { streamChat, submitContact } from "../lib/chatClient.js";
 import { getSessionId, newSessionId } from "../lib/session.js";
@@ -18,6 +20,16 @@ function makeId() {
  * Embeddable support chat. Talks ONLY to the Orchestration Gateway (`POST {apiUrl}/api/chat`);
  * it never touches the database and holds no secrets. All message text is rendered as plain
  * text (React escapes it), never as HTML.
+ *
+ * @param {object} props
+ * @param {string} props.apiUrl Gateway base URL; requests go to `{apiUrl}/api/chat`.
+ * @param {string} props.tenantId Tenant the visitor is chatting with.
+ * @param {string} [props.title="Support"] Header text.
+ * @param {string} [props.greeting] First assistant message (default "Hi! How can I help you today?").
+ * @param {"left"|"right"} [props.position="right"] Side of the screen for the launcher and panel.
+ * @param {string} [props.accentColor] Any CSS colour; overrides `--cw-accent`.
+ * @param {boolean} [props.defaultOpen=false] Start with the panel open.
+ * @param {typeof fetch} [props.fetchImpl] Replacement for `fetch` (tests, custom proxies).
  */
 export default function ChatWidget({
     apiUrl,
@@ -37,6 +49,8 @@ export default function ChatWidget({
         { id: makeId(), role: "assistant", text: greeting, status: "done" },
     ]);
     const abortRef = useRef(null);
+    // The scope lets "New chat" or a tenant/API change invalidate every in-flight callback at once,
+    // even if a custom fetchImpl ignores the abort signal.
     const scopeRef = useRef(null);
     if (!scopeRef.current) scopeRef.current = createConversationScope();
     const [sessionId, setSessionId] = useState(() => getSessionId(tenantId));
@@ -51,6 +65,8 @@ export default function ChatWidget({
     const inputRef = useRef(null);
     const lastUserTextRef = useRef("");
 
+    // fresh=true ("New chat") mints a new persisted session id; fresh=false (tenant/API change)
+    // just reloads the stored id for the current tenant. Server-side history and tickets stay.
     const resetConversation = useCallback((fresh) => {
         scopeRef.current.reset();
         abortRef.current = null;
@@ -180,6 +196,8 @@ export default function ChatWidget({
         send(input);
     };
 
+    // Saves name + email against the escalated ticket. "saved" means persisted for staff review,
+    // not that an email was sent. The follow-up token lives in React state only, never in storage.
     const onContactSubmit = async (event) => {
         event.preventDefault();
         if (!followUp || contactPendingRef.current || contactStatus === "saved") return;
@@ -199,6 +217,9 @@ export default function ChatWidget({
         } catch {
             if (request.isCurrent()) {
                 setContactStatus("error");
+                // TODO(widget-contact-errors): every failure shows this one message. Map the
+                // contact error codes (invalid_follow_up, contact_already_submitted, rate_limited)
+                // to specific text in lib/messages.js, as streamChat errors already are.
                 setContactError("Your details could not be saved. Please try again or contact the business directly.");
             }
         } finally {

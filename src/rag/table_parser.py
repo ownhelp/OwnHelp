@@ -3,6 +3,17 @@ Modular Table Parser & Linearizer for RAG Pipelines and API Gateways.
 
 Provides robust parsing, extraction, and linearization of Markdown and JSON tables
 into high-density semantic text formats optimized for vector search and LLM context.
+
+Why tables get special handling: embedding models and small LLMs handle pipe-delimited rows poorly,
+because a cell value ("30 days") is separated from its column header ("Return window") and the
+row loses meaning once chunked. Linearizing each row to "Header: value | Header: value" keeps every
+fact self-describing so retrieval and the 3B model can use it.
+
+Inputs: Markdown text (``linearize_tables``) or a list of dict records (``linearize_records``).
+Outputs: text with table rows rewritten as ``- Header: value | Header: value`` lines (mode
+"replace"), or the original table followed/preceded by a "*Table Summary:*" block (modes "augment"
+/ "prepend"); ``ParsedTable`` objects for structured access.
+Callers: ``src/rag/ingestor.py`` (legacy parser, mode "augment") and the API gateway for tabular input.
 """
 
 from __future__ import annotations
@@ -211,7 +222,8 @@ class MarkdownTableParser:
             start_pos = match.start()
             end_pos = match.end()
 
-            # Attempt to find nearest preceding header as title
+            # Nearest preceding markdown header becomes the title so the linearized rows keep their
+            # topical context (e.g. "[Shipping Rates]") after chunking
             preceding_text = text[:start_pos]
             headers = re.findall(r"^#{1,4}\s+(.*)$", preceding_text, re.MULTILINE)
             title = headers[-1].strip() if headers else None
@@ -247,7 +259,8 @@ class MarkdownTableParser:
         if not tables:
             return text
 
-        # Replace in reverse order so character offsets stay valid
+        # Replace in reverse order so character offsets stay valid (later edits do not shift the
+        # start/end offsets of earlier tables)
         transformed = text
         for table in reversed(tables):
             linearized = table.to_narrative(format_style=format_style, strip_markdown=strip_markdown)

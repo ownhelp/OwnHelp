@@ -1,11 +1,53 @@
 #!/usr/bin/env bash
+# Launcher for the optional client-training sandbox (Compose project
+# "ownhelp_client_training"). It is never started by the standard application.
+#
+# Usage (from the repository root):
+#   bash examples/client-training/scripts/setup.sh [ACTION] [--with-ollama] [extra compose args]
+#
+# ACTION is the first argument and defaults to "setup" only when no arguments are given.
+# Options come after it, so write `setup.sh setup --with-ollama`, not `setup.sh --with-ollama`
+# (a leading option is read as an unknown action and prints the usage line).
+#
+# ACTION:
+#   setup       Build the gateway and dashboard images, start the stack, wait until
+#               healthy, print endpoints and the seed summary.
+#   start       Start without rebuilding, then wait and print the summary.
+#   stop        Stop containers. Volumes (demo data) are kept.
+#   restart     Restart gateway-demo and dashboard-demo only. Data is kept.
+#   status      Show `compose ps`, the seed summary and gateway health.
+#   logs        Pass through to `compose logs` (e.g. `logs gateway-demo`).
+#   pull-model  `ollama pull $OLLAMA_MODEL` inside the bundled ollama-demo container
+#               (the stack must already be running with --with-ollama).
+#   reset       DELETES this project's containers and volumes (`down -v`) and the
+#               seed summary file. Add --rebuild to rebuild and start afterwards.
+#
+# Options:
+#   --with-ollama  Use the bundled ollama-demo container instead of host Ollama:
+#                  sets OLLAMA_HOST=http://ollama-demo:11434 and enables the "ollama"
+#                  Compose profile. Pass it on every invocation that should include it.
+#                  The profile is always enabled for stop/reset/status/logs/pull-model so
+#                  a bundled Ollama is never left running by accident.
+#
+# Environment and files:
+#   Reads/creates examples/client-training/.env.local (gitignored). On first run it is
+#   generated with a random local MongoDB password; see .env.example for every variable.
+#   The repository root .env is never read. HOST_HF_CACHE_DIR is exported (host
+#   ~/.cache/huggingface if present, else an empty directory) so the seed job can reuse
+#   an already-downloaded embedding model. Requires docker with the compose plugin, curl,
+#   and python3 (used for the summary output and as an openssl fallback).
+#
+# Side effects: creates examples/client-training/logs/ and, only when the user's Docker
+# config references a missing "desktop" credential helper, .docker-client/config.json
+# (used via DOCKER_CONFIG for this run). Builds local images and Docker volumes; never
+# touches the standard stack's databases or volumes.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 DEMO_ROOT="${PROJECT_ROOT}/examples/client-training"
 COMPOSE_FILE="${DEMO_ROOT}/compose.yaml"
-COMPOSE_PROJECT="capstone_client_training"
+COMPOSE_PROJECT="ownhelp_client_training"
 ENV_FILE="${DEMO_ROOT}/.env.local"
 SUMMARY_FILE="${DEMO_ROOT}/logs/seed_summary.json"
 
@@ -40,6 +82,8 @@ ensure_env_file() {
         export HOST_HF_CACHE_DIR="${DEMO_ROOT}/logs/.hf_cache_empty"
     fi
 
+    # First run only: write .env.local with a random database password so no shared default
+    # password is used on the user's machine. The values mirror .env.example.
     if [ ! -f "${ENV_FILE}" ]; then
         local rand_pass
         if command -v openssl >/dev/null 2>&1; then
@@ -61,12 +105,11 @@ DEMO_MONGO_PASSWORD="${rand_pass}"
 DEMO_MONGO_PORT="27018"
 
 MONGODB_URI="mongodb://demo_admin:${rand_pass}@mongodb-demo:27017/?directConnection=true&authSource=admin"
-DEMO_HOST_MONGODB_URI="mongodb://demo_admin:${rand_pass}@127.0.0.1:27018/?directConnection=true&authSource=admin"
 
 DEMO_GATEWAY_PORT="4001"
 DEMO_DASHBOARD_PORT="3001"
-SESSION_COOKIE_NAME="capstone_demo_session"
-UPLOAD_STAGING_DIR="/tmp/capstone_demo_uploads"
+SESSION_COOKIE_NAME="ownhelp_demo_session"
+UPLOAD_STAGING_DIR="/tmp/ownhelp_demo_uploads"
 ALLOWED_ORIGINS="http://localhost:3001,http://127.0.0.1:3001"
 NEXT_PUBLIC_GATEWAY_URL="http://localhost:4001"
 
@@ -87,6 +130,9 @@ compose_cmd() {
     docker compose --env-file "${ENV_FILE}" -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" "$@"
 }
 
+# Poll until the gateway reports vector_index_ready and the dashboard login page answers.
+# The demo-seed one-shot is checked each pass so a seeding failure aborts immediately with
+# its logs instead of waiting out the full timeout.
 wait_for_ready() {
     local gateway_port="${DEMO_GATEWAY_PORT:-4001}"
     local dashboard_port="${DEMO_DASHBOARD_PORT:-3001}"
@@ -125,7 +171,7 @@ print_status_summary() {
 
     echo ""
     echo "======================================================================"
-    echo "  CAPSTONE PORTABLE LOCAL DEMO — STATUS & ENDPOINTS"
+    echo "  OWNHELP CLIENT-TRAINING SANDBOX — STATUS & ENDPOINTS"
     echo "======================================================================"
     echo "  Dashboard UI (One-Click Demo Login): http://localhost:${dashboard_port}/login"
     echo "  Orchestration Gateway API:           http://localhost:${gateway_port}"
@@ -171,6 +217,9 @@ PY
     echo "======================================================================"
 }
 
+# TODO(setup-args): the first argument is always taken as the action, so `setup.sh --with-ollama`
+# fails with the usage line (it must be `setup.sh setup --with-ollama`). Fix: if $1 starts with
+# "--", treat the action as "setup" and keep $1 in the argument list.
 ACTION="${1:-setup}"
 shift || true
 
@@ -178,7 +227,7 @@ ensure_docker
 ensure_env_file
 
 # --with-ollama runs a bundled, project-scoped Ollama container instead of the host Ollama,
-# so the whole sandbox lives inside the capstone_client_training project.
+# so the whole sandbox lives inside the ownhelp_client_training project.
 WITH_OLLAMA=0
 REMAINING_ARGS=()
 for arg in "$@"; do

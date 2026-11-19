@@ -1,3 +1,9 @@
+// Minimal Server-Sent Events parser. We cannot use EventSource because it only does GET with no
+// request body, and /api/chat is a POST, so the response is read with fetch and parsed here.
+// Rules followed: ":" comment lines (heartbeats) are ignored, multiple `data:` lines are joined
+// with "\n", one leading space after the colon is stripped, and an event with no data lines is
+// never dispatched.
+
 /**
  * Incremental parser for a `text/event-stream` body.
  *

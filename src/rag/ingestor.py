@@ -1,8 +1,20 @@
+"""Chunks, embeds and stores a tenant's documents in the ``doc_vectors`` collection.
+
+Inputs: a tenant directory of .md/.json (legacy parser) or .md/.json/.txt (structured parser) files.
+Outputs: one MongoDB document per chunk with this schema: ``tenant_id``, ``doc_id`` (file stem or
+source-relative path), ``section``, ``chunk_index``, ``text``, ``embedding`` (384 floats for the
+default BAAI/bge-small-en-v1.5), ``created_at`` (ISO UTC), plus provenance fields
+(``source_id``, ``source_sha256``, ``source_locator``, ``source_context``, ``source_block_index``,
+``parser_version``) in structured mode. The same schema is used for every tenant.
+Callers: ``src/demo_setup/seeder.py``, ingestion scripts under ``scripts/`` and the dashboard backend.
+"""
+
 import os
 import json
 import re
-from typing import List, Dict, Any, Optional
+from typing import Callable, List, Dict, Any, Optional
 from pathlib import Path
+from bson import ObjectId
 from dotenv import load_dotenv, find_dotenv
 from datetime import datetime, timezone
 from pymongo import MongoClient
@@ -11,6 +23,8 @@ from src.rag.table_parser import MarkdownTableParser
 from src.rag.vector_index import DEFAULT_INDEX_NAME, ensure_vector_index
 
 class RAGDocumentIngestor:
+    """Parses tenant documents, embeds the chunks and replaces that tenant's vectors."""
+
     def __init__(
         self,
         mongo_uri: Optional[str] = None,
@@ -20,7 +34,7 @@ class RAGDocumentIngestor:
         chunk_size: int = 500,
         chunk_overlap: int = 75,
         env_file: Optional[Path | str] = None,
-        document_parser: str = "legacy",
+        document_parser: str = "structured",
     ):
         if document_parser not in {"legacy", "structured"}:
             raise ValueError("document_parser must be legacy or structured")
@@ -67,6 +81,11 @@ class RAGDocumentIngestor:
         )
 
     def _chunk_text(self, text: str) -> List[str]:
+        """Splits a section into overlapping word windows (chunk_size words, chunk_overlap shared).
+
+        Word counts are a cheap proxy for tokens; the default 500 words keeps most chunks inside the
+        embedding model's token limit, and the overlap stops an answer being cut at a boundary.
+        """
         words = text.split()
         if not words:
             return []
@@ -80,6 +99,9 @@ class RAGDocumentIngestor:
         return chunks
 
     def _parse_file(self, file_path: Path, source_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Turns one file into chunk dicts; legacy mode splits markdown on H1-H3 headers (the header
+        becomes ``section``) and JSON per top-level key or list item, structured mode delegates to
+        ``src/documents``."""
         if getattr(self, "document_parser", "legacy") == "structured":
             from src.documents.parser import parse_document
             from src.documents.integration import document_chunks
@@ -169,17 +191,32 @@ class RAGDocumentIngestor:
                               if structured else self._parse_file(file_path))
         return raw_chunks
 
-    def ingest_tenant_directory(self, tenant_id: str, tenant_dir: Path) -> int:
-        """Parses, embeds, and stores all documents in a tenant folder."""
+    def ingest_tenant_directory(
+        self,
+        tenant_id: str,
+        tenant_dir: Path,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> int:
+        """Parses, embeds, and stores all documents in a tenant folder.
+
+        ``progress_callback`` (optional) receives "parsing", "embedding" and "writing" as each stage
+        begins, so a UI can show real progress; None keeps the behaviour unchanged.
+        """
         structured = getattr(self, "document_parser", "legacy") == "structured"
+        if progress_callback:
+            progress_callback("parsing")
         raw_chunks = self.collect_tenant_chunks(tenant_dir)
 
         if not raw_chunks:
             return 0
 
+        if progress_callback:
+            progress_callback("embedding")
         # Batch embed the chunk strings
         texts = [c["text"] for c in raw_chunks]
         if structured:
+            # Fail loudly rather than let the encoder silently truncate: a truncated chunk would be
+            # indexed with text the visitor can never retrieve.
             tokenizer = getattr(self.model, "tokenizer", None)
             limit = getattr(self.model, "max_seq_length", None)
             if tokenizer is None or type(limit) is not int or limit < 1:
@@ -207,7 +244,39 @@ class RAGDocumentIngestor:
                     document[key] = chunk[key]
             documents.append(document)
 
-        # Purge prior embeddings for this tenant to allow clean re-indexing
-        self.collection.delete_many({"tenant_id": tenant_id})
-        self.collection.insert_many(documents)
+        if progress_callback:
+            progress_callback("writing")
+        self.replace_chunks({"tenant_id": tenant_id}, documents)
+        return len(documents)
+
+    def replace_chunks(self, scope: Dict[str, Any], documents: List[Dict[str, Any]]) -> int:
+        """Swaps the stored chunks matching ``scope`` for ``documents`` without ever leaving the scope empty.
+
+        Insert first, delete second: the new chunks get pre-generated ``_id`` values (no schema field
+        is added, every Mongo document already has ``_id``), are inserted, and only then are the old
+        chunks (same ``scope`` but ``_id`` not in the new ids) removed. If the insert raises, the old
+        chunks are untouched; any partially inserted new ids are removed best-effort (a failure of
+        that cleanup is swallowed so the original insert error is what the caller sees), and the
+        error is re-raised.
+
+        Trade-off: between the insert and the delete, old and new chunks coexist, so a live query
+        could briefly retrieve duplicates of the same text (one stale, one fresh). That is acceptable
+        because the window is a single round trip, duplicates carry the same or near-identical
+        content, and the alternative (delete first) can leave a tenant with no knowledge at all.
+        Other tenants and other doc_ids outside ``scope`` are never touched.
+        """
+        if not documents:
+            return 0
+        new_ids = [ObjectId() for _ in documents]
+        for document, new_id in zip(documents, new_ids):
+            document["_id"] = new_id
+        try:
+            self.collection.insert_many(documents)
+        except Exception:
+            try:
+                self.collection.delete_many({"_id": {"$in": new_ids}})
+            except Exception:
+                pass
+            raise
+        self.collection.delete_many({**scope, "_id": {"$nin": new_ids}})
         return len(documents)

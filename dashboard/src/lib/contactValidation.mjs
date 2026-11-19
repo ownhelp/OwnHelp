@@ -1,11 +1,22 @@
+/**
+ * Validation for the public support email and phone on the profile page. Pure functions (no React)
+ * so they can be tested with `node --test`. Phones are stored in E.164 with an optional " xNNN"
+ * extension suffix.
+ */
 import isEmail from "validator/lib/isEmail.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js/max";
 
+/** Splits a stored value such as "+44 20 7946 0018 #123" into { number, extension }. */
 export function splitContactPhone(value = "") {
     const match = /^(.*?)(?:\s*[xX#]\s*(\d+))?$/.exec(value.trim());
     return { number: match?.[1]?.trim() || "", extension: match?.[2] || "" };
 }
 
+/**
+ * Returns "" for an empty phone, the E.164 string (plus " xEXT") when valid, or null when invalid.
+ * The character whitelist runs first so text like "Call +1..." or "javascript:..." is rejected
+ * before libphonenumber can extract a number from it (extract: false).
+ */
 export function normalizeContactPhone(number, extension = "") {
     if (!number.trim() && !extension) return "";
     if (number.length > 50 || !/^\+?[0-9 ().-]+$/.test(number.trim()) ||
@@ -15,6 +26,7 @@ export function normalizeContactPhone(number, extension = "") {
     return phone.number + (extension ? ` x${extension}` : "");
 }
 
+/** Returns a map of field name to error message; an empty object means the form is valid. */
 export function validateContactFields(form) {
     const errors = {};
     const email = form.contact_email.trim();

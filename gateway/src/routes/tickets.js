@@ -1,3 +1,16 @@
+/**
+ * Ticket (escalation review queue) routes, mounted under /api behind requireAuth.
+ *
+ * Purpose: the dashboard lists, creates and updates support tickets in `ticket_logs`. Escalations
+ * from the public chat arrive here as `pending_review` tickets (see chat/escalation.js), so human
+ * review needs no separate store.
+ *
+ * Security: every query is filtered by BOTH the ticket id and the session-authorized tenant id
+ * (authorizeTenantAccess), so guessing another tenant's ticket id returns 404, never its data.
+ * Fields are validated against fixed allowlists before any $set.
+ *
+ * Callers: the dashboard ticket queue and detail view.
+ */
 const express = require("express");
 const { getTicketLogsCollection } = require("../db/mongo");
 const { authorizeTenantAccess } = require("../middleware/auth");
@@ -31,6 +44,8 @@ function normalizeMessages(rawMessages) {
 
 /**
  * GET /api/tenants/:tenantId/tickets
+ * Auth: session cookie. Query: status (all|resolved|pending_review|flagged), search.
+ * Response 200 array of tickets; 400 invalid status; 403 tenant mismatch.
  * Returns tickets filtered by session-authorized tenant_id and optional status / search query params.
  */
 router.get("/tenants/:tenantId/tickets", async (req, res) => {
@@ -89,6 +104,7 @@ router.get("/tenants/:tenantId/tickets", async (req, res) => {
 
 /**
  * POST /api/tickets (and POST /api/tenants/:tenantId/tickets)
+ * Auth: session cookie. Response 201 with the stored ticket; 400 validation; 403 tenant mismatch.
  * Creates a new ticket log entry scoped to the session-authorized tenant.
  */
 async function createTicketHandler(req, res) {
@@ -227,6 +243,7 @@ router.post("/tenants/:tenantId/tickets", createTicketHandler);
 
 /**
  * PATCH /api/tickets/:ticketId
+ * Auth: session cookie. Response 200 updated ticket; 400 validation; 404 not found for this tenant.
  * Updates status, admin_notes, customer_contact, escalation_reason,
  * ticket_summary, or messages for a ticket scoped strictly by BOTH ticket_id
  * and the session-authorized tenant_id.

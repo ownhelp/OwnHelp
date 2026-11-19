@@ -1,3 +1,5 @@
+// Protects the public support email/phone rules: malformed or injected input is rejected, valid
+// phones are normalized to E.164, and a save cannot bypass validation.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeContactPhone, splitContactPhone, validateContactFields } from "../src/lib/contactValidation.mjs";

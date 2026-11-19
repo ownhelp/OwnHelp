@@ -1,7 +1,13 @@
 "use client";
 
+/**
+ * Ticket list table plus the badge helpers (score, status, escalation) that TicketDetailModal
+ * reuses so both views colour things identically.
+ */
+
 import React from "react";
 
+// Score bands match the legend in the table header: >=0.75 high, 0.70-0.74 borderline, below low.
 export function getScoreBadgeClasses(score) {
     const num = Number(score ?? 0);
     if (num >= 0.75) {
@@ -53,6 +59,7 @@ export function getEscalationBadge(reason) {
     };
 }
 
+/** Props: tickets, loading; selectedTicketId (highlights the open row); onSelectTicket (row click). */
 export default function TicketTable({
     tickets = [],
     loading = false,

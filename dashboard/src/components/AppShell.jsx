@@ -1,10 +1,17 @@
 "use client";
 
+/**
+ * Client-side route guard and page frame. Unauthenticated visitors are redirected to /login,
+ * authenticated ones away from /login and /signup; the guard only decides what to render, the
+ * gateway still enforces auth on every API call.
+ */
+
 import React, { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import Sidebar from "@/components/Sidebar";
 
+/** Props: children (the active page). Renders the sidebar layout, or a bare/loading view per auth state. */
 export default function AppShell({ children }) {
     const pathname = usePathname();
     const router = useRouter();

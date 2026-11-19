@@ -1,3 +1,4 @@
+// Protects session persistence: stable per-tenant ids, memory fallback when storage is blocked, and New chat replacing the id.
 import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
 import { getSessionId, resetSessionMemory } from "../src/lib/session.js";

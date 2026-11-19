@@ -1,4 +1,18 @@
-/** Scoped, expiring capabilities for an already-persisted conversation ticket. */
+/**
+ * Scoped, expiring capabilities for an already-persisted conversation ticket, plus the contact
+ * validators shared with signup and tenant settings.
+ *
+ * Why a capability token: the visitor is anonymous, so "may add contact details to ticket X" has
+ * to be proved without a login. The token is AES-256-GCM encrypted (authenticated, so it cannot
+ * be forged or edited) and bound to tenant + session + ticket with a 24 hour expiry. It is only
+ * issued after the ticket was saved, and the secret never leaves the server.
+ * Key: CHAT_FOLLOW_UP_SECRET (hashed to 32 bytes). Unset, a random per-process key is used, so
+ * tokens die on restart and are not valid across replicas.
+ *
+ * Inputs: token strings and visitor contact values. Outputs: claims, normalized phone numbers,
+ * booleans. Callers: routes/chat.js (issue/read/save), routes/auth.js and routes/tenants.js
+ * (email and phone validation).
+ */
 const crypto = require("crypto");
 const isEmail = require("validator/lib/isEmail");
 const { parsePhoneNumberFromString } = require("libphonenumber-js/max");
@@ -15,6 +29,8 @@ function issueToken(tenantId, sessionId, ticketId, now = Date.now()) {
     const body = Buffer.concat([cipher.update(JSON.stringify({ tenantId, sessionId, ticketId, expires: now + TTL_MS }), "utf8"), cipher.final()]);
     return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64url");
 }
+// Returns claims or null; every failure (bad shape, tamper, wrong tenant/session, expired) looks
+// the same to the caller so a probing client learns nothing about why a token was refused.
 function readToken(token, tenantId, sessionId, now = Date.now()) {
     try {
         if (typeof token !== "string" || token.length > 2048 || !/^[\w-]+$/.test(token)) return null;

@@ -1,7 +1,17 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+/** Drag-and-drop / file-picker uploader for .md and .json knowledge documents. */
 
+import React, { useRef, useState } from "react";
+import { describeUploadStage } from "@/lib/uploadStream.mjs";
+
+/**
+ * Props: tenantId; onUploadFile (async, receives { file, overwrite, docId, onStage } and returns
+ * the gateway summary; it should forward onStage to uploadTenantDocument so the stage shown is the
+ * server's real one); targetDocId (when set, the upload replaces that document and overwrite is forced on);
+ * onClearTargetDocId (clears that target). The extension is checked here for fast feedback only;
+ * the gateway validates the file again.
+ */
 export default function FileDropzone({
     tenantId,
     onUploadFile,
@@ -11,7 +21,7 @@ export default function FileDropzone({
     const fileInputRef = useRef(null);
     const [dragActive, setDragActive] = useState(false);
     const [overwrite, setOverwrite] = useState(true);
-    const [stage, setStage] = useState("idle"); // idle | uploading | embedding | ready | error
+    const [stage, setStage] = useState("idle"); // idle | uploading | parsing | embedding | writing | processing (non-streaming gateway) | ready | error
     const [statusMessage, setStatusMessage] = useState("");
     const [selectedFileName, setSelectedFileName] = useState("");
 
@@ -27,24 +37,22 @@ export default function FileDropzone({
 
         setSelectedFileName(file.name);
         setStage("uploading");
-        setStatusMessage(`Uploading ${file.name} to Gateway staging...`);
+        setStatusMessage(describeUploadStage("uploading", file.name));
 
-        const embeddingTimer = setTimeout(() => {
-            setStage((current) =>
-                current === "uploading" ? "embedding" : current
-            );
-            setStatusMessage(
-                `Embedding chunks with BAAI/bge-small-en-v1.5 -> doc_vectors...`
-            );
-        }, 450);
+        // Stages come from the gateway's NDJSON stream. A gateway that does not stream never
+        // calls this, so the label stays on the generic "processing" state set below.
+        const handleStage = (nextStage) => {
+            setStage(nextStage);
+            setStatusMessage(describeUploadStage(nextStage, file.name));
+        };
 
         try {
             const summary = await onUploadFile({
                 file,
                 overwrite: targetDocId ? true : overwrite,
                 docId: targetDocId || "",
+                onStage: handleStage,
             });
-            clearTimeout(embeddingTimer);
             setStage("ready");
             setStatusMessage(
                 `Ready — ${summary.doc_id} (${summary.chunks_created} chunks indexed)`
@@ -53,7 +61,6 @@ export default function FileDropzone({
                 fileInputRef.current.value = "";
             }
         } catch (err) {
-            clearTimeout(embeddingTimer);
             setStage("error");
             setStatusMessage(err.message || "Ingestion failed.");
             if (fileInputRef.current) {
@@ -91,7 +98,9 @@ export default function FileDropzone({
         }
     };
 
-    const isBusy = stage === "uploading" || stage === "embedding";
+    const isBusy = !["idle", "ready", "error"].includes(stage);
+    // Parsing, embedding and writing are all the server-side "embedding" step of the indicator.
+    const isProcessingStep = isBusy && stage !== "uploading";
 
     return (
         <section className="rounded border border-zinc-800 bg-zinc-950">
@@ -180,7 +189,7 @@ export default function FileDropzone({
                             className={
                                 stage === "uploading"
                                     ? "text-zinc-100 font-semibold"
-                                    : stage === "embedding" || stage === "ready"
+                                    : isProcessingStep || stage === "ready"
                                     ? "text-zinc-400"
                                     : "text-zinc-600"
                             }
@@ -190,7 +199,7 @@ export default function FileDropzone({
                         <span className="text-zinc-700">→</span>
                         <span
                             className={
-                                stage === "embedding"
+                                isProcessingStep
                                     ? "text-zinc-100 font-semibold"
                                     : stage === "ready"
                                     ? "text-zinc-400"

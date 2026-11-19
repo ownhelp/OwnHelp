@@ -1,3 +1,5 @@
+"""Protects retrieval behavior: the BGE query prefix, optional cross-encoder reranking and its score cutoff, and per-tenant filtering."""
+
 import unittest
 
 from src.rag.retriever import BGE_QUERY_PREFIX, RAGRetriever

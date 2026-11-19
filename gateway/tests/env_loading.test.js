@@ -1,3 +1,4 @@
+// Protects: .env loading precedence (process env wins, root before gateway) and that chat settings come from it without leaking values.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");

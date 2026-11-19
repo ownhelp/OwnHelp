@@ -1,3 +1,4 @@
+// Protects the profile save payload: editable fields only, server-owned policy and identity excluded.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { profilePayload, readAssistantPolicy } from "../src/lib/profile.mjs";

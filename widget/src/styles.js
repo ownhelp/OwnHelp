@@ -1,5 +1,8 @@
-// Injected as a <style> element inside the widget (and inside the shadow root for the
-// <script> embed), so host-page CSS cannot leak in and widget CSS cannot leak out.
+// All widget CSS as one string, `WIDGET_CSS`. ChatWidget injects it as a <style> element inside
+// itself (inside the shadow root for the <script> embed), so host-page CSS cannot leak in and widget
+// CSS cannot leak out, and React users need no CSS import. Theming hooks are the `--cw-*` custom
+// properties on `.cw-root` (the `accentColor` prop overrides `--cw-accent`); a dark palette is
+// applied through prefers-color-scheme.
 export const WIDGET_CSS = `
 .cw-root {
     --cw-accent: #1f6feb;

@@ -388,7 +388,7 @@ ollama==0.6.3 \
     --hash=sha256:6a20bc42c1a5f889295d7ec490d35e5132fc31f339561530f43a8abd4dbfe508
     # via
     #   uv.lock version constraints
-    #   pro390 (pyproject.toml)
+    #   ownhelp-support (pyproject.toml)
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
@@ -401,7 +401,7 @@ pydantic==2.14.1 \
     --hash=sha256:94f478203dd03404682a1ada216965651dd74b1d2d5ffd62e00e0837caab5c26
     # via
     #   uv.lock version constraints
-    #   pro390 (pyproject.toml)
+    #   ownhelp-support (pyproject.toml)
     #   ollama
 pydantic-core==2.50.1 \
     --hash=sha256:0036473f5583e6a60e50b8b21651511564277a3f05cc5dab8cf579f552cd5f6c \
@@ -624,13 +624,13 @@ pymongo==4.19.0 \
     --hash=sha256:ff9679803b691aa5ff6efe4de2d715e65e1784641e334d701b7b80a0776c35f8
     # via
     #   uv.lock version constraints
-    #   pro390 (pyproject.toml)
+    #   ownhelp-support (pyproject.toml)
 python-dotenv==1.2.4 \
     --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc \
     --hash=sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0
     # via
     #   uv.lock version constraints
-    #   pro390 (pyproject.toml)
+    #   ownhelp-support (pyproject.toml)
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
     --hash=sha256:0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a \
@@ -988,7 +988,7 @@ sentence-transformers==6.1.0 \
     --hash=sha256:eb8122f4d180f552eda26dc3d77e84e8c11dc2b1d456a406b9f24abb70ceeadd
     # via
     #   uv.lock version constraints
-    #   pro390 (pyproject.toml)
+    #   ownhelp-support (pyproject.toml)
 setuptools==84.0.0 \
     --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 \
     --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73

@@ -11,6 +11,10 @@
  * One ticket per (tenant, conversation): the id is a hash of both, so a visitor who escalates twice
  * updates the same ticket, with the full transcript, instead of opening duplicates. The visitor's raw
  * session id is never stored.
+ *
+ * Inputs: the sanitized turn, sources and transcript from routes/chat.js. Outputs: a ticket
+ * document and an acknowledged upsert into ticket_logs. Callers: routes/chat.js (recordTurn),
+ * chat/followUp.js (reuses withTimeout and SAVE_TIMEOUT_MS).
  */
 const crypto = require("crypto");
 const { getTicketLogsCollection } = require("../db/mongo");
@@ -87,6 +91,8 @@ function buildEscalationTicket({ tenantId, sessionId, message, answer, done, sou
     };
 }
 
+// A stuck database must not hold a visitor's chat open forever; the timer is unref'd so it never
+// keeps the process alive and is cleared as soon as the race settles.
 function withTimeout(promise, timeoutMs) {
     let timer;
     const timeout = new Promise((_, reject) => {

@@ -1,3 +1,4 @@
+// Protects: escalated chats become one deduplicated, tenant-scoped review ticket without leaking retrieval details to the visitor.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { createApp } = require("../src/server");

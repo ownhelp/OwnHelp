@@ -1,3 +1,4 @@
+// Protects visitor-facing error text: every code maps to a safe message that never leaks server internals, with correct retry hints.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ChatError, streamChat } from "../src/lib/chatClient.js";

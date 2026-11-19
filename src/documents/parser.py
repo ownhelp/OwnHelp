@@ -6,6 +6,17 @@ ancestor preambles as source_fragments. JSON locators are RFC 6901 pointers into
 the decoded source. Structured rendering preserves values rather than claiming to
 be a verbatim source quotation. Table blocks stay whole so headers, negative
 columns, conditions, and row identities cannot become detached.
+
+Why it exists: the legacy ingestor splits by word count and can separate a table row from the
+conditions ("excludes sale items") that qualify it, which produces wrong grounded answers. Here
+every block is a complete structural unit (paragraph, heading, table with its inherited section
+context, or JSON record) with a locator pointing back at the source bytes.
+
+Inputs: a path (``parse_document``) or text plus suffix (``parse_document_text``); .md, .txt and .json.
+Outputs: ``ParsedDocument`` (source id, SHA-256, raw text, ``DocumentBlock`` list). Oversized blocks
+are never truncated: ``context_blocks`` splits tables at row boundaries or raises ``DocumentParseError``.
+Callers: ``src/documents/integration.py`` (chunk conversion) and ``RAGDocumentIngestor`` in
+"structured" mode.
 """
 
 from __future__ import annotations
@@ -29,6 +40,8 @@ class UnsupportedDocumentError(DocumentParseError):
 
 @dataclass(frozen=True)
 class DocumentBlock:
+    """One atomic unit of a document: its text, kind, section path, source locator and metadata."""
+
     text: str
     kind: str
     section: str
@@ -38,6 +51,8 @@ class DocumentBlock:
 
 @dataclass(frozen=True)
 class ParsedDocument:
+    """A parsed source: identity, content hash of the exact UTF-8 text, raw text and its blocks."""
+
     source_id: str
     sha256: str
     raw_text: str
@@ -45,6 +60,7 @@ class ParsedDocument:
 
 
 def _span(start: int, end: int) -> dict[str, int]:
+    """A half-open character range into ``raw_text`` used as a source locator."""
     return {"start": start, "end": end}
 
 
@@ -120,6 +136,11 @@ def _footer_end(lines: list[str], start: int) -> int:
 
 
 def _markdown(text: str) -> list[DocumentBlock]:
+    """Splits markdown into heading, paragraph and whole-table blocks, tracking the heading path.
+
+    Fenced code is skipped so ``#`` or ``|`` inside it is not misread as structure. A table whose
+    rows have inconsistent cell counts is rejected rather than guessed at.
+    """
     lines = text.splitlines(keepends=True)
     offsets = []
     offset = 0
@@ -195,7 +216,8 @@ def _markdown(text: str) -> list[DocumentBlock]:
                     stop += 1
                 # Include the original section prefix, which may contain
                 # conditions applying to every row. This intentional overlap
-                # is disclosed by the separate table_locator.
+                # is disclosed by the separate table_locator. Ancestor-heading preambles and
+                # trailing footnotes are appended too, so a retrieved table is self-contained.
                 context_start = section_start
                 footer_stop = _footer_end(lines, stop)
                 fragments = ([_span(0, first_heading_start)]
@@ -256,6 +278,8 @@ def _metadata_value(value: Any) -> Any:
 
 
 def _json_blocks(node: Any, pointer: str = "", context: list | None = None) -> list[DocumentBlock]:
+    """Emits one block per record, descending through arrays of objects and carrying the parent
+    fields along as ``parent_context`` so a record keeps the facts of its container."""
     context = list(context or [])
     if isinstance(node, list) and node and all(isinstance(item, (dict, list)) for item in node):
         return [block for index, item in enumerate(node)
@@ -278,6 +302,7 @@ def _json_blocks(node: Any, pointer: str = "", context: list | None = None) -> l
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict:
+    """json object hook that rejects duplicate keys, which json.loads would silently collapse."""
     result = {}
     for key, value in pairs:
         if key in result:

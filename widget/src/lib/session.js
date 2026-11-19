@@ -1,3 +1,7 @@
+// Visitor session ids, one per tenant. The id is not a credential: it only lets the gateway
+// group a visitor's messages into one conversation. It is kept in localStorage so a reload
+// continues the conversation, and mirrored in memory so blocked storage (private windows,
+// disabled cookies) still gives a stable id for the page's lifetime.
 const memoryStore = new Map();
 
 function generateId() {
@@ -8,6 +12,7 @@ function generateId() {
 }
 
 function defaultStorage() {
+    // Merely reading `localStorage` can throw (e.g. sandboxed iframes), hence the try/catch.
     try {
         return typeof localStorage !== "undefined" ? localStorage : null;
     } catch {
@@ -18,6 +23,10 @@ function defaultStorage() {
 /**
  * Returns a stable per-tenant visitor session id. Uses localStorage when it is
  * available and falls back to in-memory storage (private windows, blocked storage).
+ *
+ * @param {string} tenantId Tenant the session belongs to.
+ * @param {Pick<Storage, "getItem"|"setItem">|null} [storage] Storage to use (default: localStorage).
+ * @returns {string} The session id (a UUID where `crypto.randomUUID` exists).
  */
 export function getSessionId(tenantId, storage = defaultStorage()) {
     const key = `support_widget_session:${tenantId}`;
@@ -51,7 +60,14 @@ export function resetSessionMemory() {
     memoryStore.clear();
 }
 
-/** Starts and persists a fresh conversation; existing server history is untouched. */
+/**
+ * Starts and persists a fresh conversation id for the tenant ("New chat"); existing server
+ * history is untouched.
+ *
+ * @param {string} tenantId Tenant the session belongs to.
+ * @param {Pick<Storage, "getItem"|"setItem">|null} [storage] Storage to use (default: localStorage).
+ * @returns {string} The new session id.
+ */
 export function newSessionId(tenantId, storage = defaultStorage()) {
     const key = `support_widget_session:${tenantId}`;
     const id = generateId();

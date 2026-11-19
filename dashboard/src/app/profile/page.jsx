@@ -1,21 +1,21 @@
 "use client";
 
+/**
+ * Profile route ("/profile"): edits business identity, validated public contact details, allowed
+ * widget origins and the agent runtime config (Business Instructions, tone, temperature, context
+ * chunks, similarity threshold). The core assistant policy is shown read-only; save payloads are
+ * built by src/lib/profile.mjs so server-owned fields are never written back.
+ */
+
 import BusinessPhoneInput from "@/components/BusinessPhoneInput";
 import { splitContactPhone, validateContactFields } from "@/lib/contactValidation.mjs";
 import React, { useState, useEffect, useCallback } from "react";
 import { useTenant } from "@/context/TenantContext";
 import { fetchTenantConfig, updateTenantConfig } from "@/lib/api";
 import ConfigSlider from "@/components/ConfigSlider";
+import { DEFAULT_AGENT_TONE, TONE_PRESETS } from "@/lib/agentDefaults.mjs";
 import { originsToText } from "@/lib/origins.mjs";
 import { profilePayload, readAssistantPolicy } from "@/lib/profile.mjs";
-
-const TONE_PRESETS = [
-    "Warm & Professional",
-    "Rugged & Direct",
-    "Empathetic & Clinical",
-    "Technical & Concise",
-    "Friendly & Conversational",
-];
 
 const INITIAL_FORM = {
     tenant_id: "",
@@ -30,7 +30,7 @@ const INITIAL_FORM = {
     allowed_origins: "",
     agent_config: {
         system_prompt: "",
-        agent_tone: "Warm & Professional",
+        agent_tone: DEFAULT_AGENT_TONE,
         temperature: 0.2,
         max_context_chunks: 4,
         similarity_threshold: 0.7,
@@ -52,7 +52,7 @@ function normalizeDocToForm(doc) {
         allowed_origins: originsToText(doc?.widget_config?.allowed_origins),
         agent_config: {
             system_prompt: doc?.agent_config?.system_prompt || "",
-            agent_tone: doc?.agent_config?.agent_tone || "Warm & Professional",
+            agent_tone: doc?.agent_config?.agent_tone || DEFAULT_AGENT_TONE,
             temperature:
                 typeof doc?.agent_config?.temperature === "number"
                     ? doc.agent_config.temperature

@@ -1,4 +1,13 @@
-"""Canonical support behavior shared by local evaluation and live chat."""
+"""Canonical support behavior shared by local evaluation and live chat.
+
+The core system prompt lives in ``system_policy.json`` (versioned via ``POLICY_VERSION``) so
+evaluation and production use byte-identical instructions. Tenants can only append tone and extra
+instructions (``build_policy_prompt``); they cannot replace the core. The module also holds a
+post-generation regex guard (``requires_handoff_safeguard``) because the product cannot actually
+transfer a visitor to a human or send messages, so any answer promising that is replaced with
+``SAFE_FOLLOWUP_ANSWER`` and escalated.
+Callers: ``src/inference/client.py``, ``src/chat/orchestrator.py``, evaluation scripts.
+"""
 
 import json
 from pathlib import Path

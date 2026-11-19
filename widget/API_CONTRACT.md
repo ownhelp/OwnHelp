@@ -1,9 +1,10 @@
 # Chat API Contract: `POST /api/chat`
 
-This is the contract the embeddable widget (`widget/`) expects from the Orchestration Gateway.
-`widget/mock/mock_gateway.js` is an executable reference implementation, and
-`widget/tests/mock_gateway.test.js` checks the widget client against it. It is a mock:
-no retrieval, no generation, no database.
+This is the contract between the embeddable widget (`widget/`) and the Orchestration Gateway.
+The real implementation is `gateway/src/routes/chat.js`. `widget/mock/mock_gateway.js` is an
+executable reference mock (no retrieval, no generation, no database), and
+`widget/tests/mock_gateway.test.js` checks the widget client against it. The mock does not
+enforce every gateway rule (session id format, per-tenant origins, body size); the real gateway does.
 
 ## Request
 
@@ -25,9 +26,11 @@ Accept: text/event-stream, application/json
 | :--- | :--- | :--- |
 | `tenant_id` | string | Required. Must match a `businesses.tenant_id`. Used as the `$vectorSearch` pre-filter. |
 | `message` | string | Required, non-empty, at most 2000 characters. |
-| `session_id` | string | Required. Random id generated and stored by the widget (`localStorage`, per tenant). Not a credential. |
+| `session_id` | string | Required. 16 to 128 characters from `A-Za-z0-9_.:-` (a UUID qualifies). Generated and stored by the widget (`localStorage`, per tenant). Not a credential; the gateway keys conversation history on it. |
 
-The request carries **no cookies and no `Authorization` header**. It is a public, anonymous endpoint.
+The body is limited to 16 KB. The request carries **no cookies and no `Authorization` header**. It is a
+public, anonymous endpoint. The gateway answers CORS itself (`POST, OPTIONS`, `Content-Type` only, no
+credentials) and checks the request `Origin` against the tenant's allowed origins.
 
 ## Success response: streaming (preferred)
 
@@ -37,7 +40,10 @@ The request carries **no cookies and no `Authorization` header**. It is a public
 | :--- | :--- | :--- | :--- |
 | 1 | `token` | `{"text": "Items "}` | Zero or more. Text deltas; the widget concatenates them. |
 | 2 | `done` | `{}` | Terminates a successful reply. May include `follow_up` after a saved escalation. |
-| any | `error` | `{"code": "generation_failed", "message": "..."}` | Terminal. Used when a failure happens after the `200` has been sent. No `done` follows. Codes: `generation_failed` (the model failed or produced unusable output), `stream_interrupted` (the connection to the backend was cut mid-reply), `timeout` (the overall time limit passed). |
+| any | `error` | `{"code": "generation_failed", "message": "..."}` | Terminal. Used when a failure happens after the `200` has been sent. No `done` follows. Codes: `generation_failed` (the model failed or produced unusable output), `stream_interrupted` (the connection to the backend was cut mid-reply, or it ended without finishing), `timeout` (the overall time limit passed). |
+
+If a human escalation could not be saved as a ticket, the gateway appends one last `token` event with a
+short notice (to contact the business directly) before `done`, and `done` carries no `follow_up`.
 
 The `message` text is for developers. The widget never shows it: it shows a fixed, safe sentence per `code`
 (see `src/lib/messages.js`) and offers Retry only when resending can help.
@@ -68,8 +74,10 @@ If the gateway goes silent for 30 seconds the widget aborts with a timeout.
 
 ## Success response: non-streaming fallback
 
-If the request does not accept `text/event-stream`, or the gateway cannot stream, return one JSON body.
-The widget handles this automatically based on the response `Content-Type`.
+If the request does not accept `text/event-stream`, the gateway returns one JSON body (the widget always
+asks for SSE first). The widget handles either based on the response `Content-Type`. Because nothing has
+been streamed, a generation failure or timeout in this mode is a plain `503 service_unavailable`
+instead of an in-stream `error` event. The body may also carry `follow_up` (see below).
 
 ```json
 {
@@ -116,36 +124,25 @@ JSON body, always this shape:
 
 | Status | `code` | When |
 | :--- | :--- | :--- |
-| 400 | `invalid_request` | Missing or wrongly typed field. |
+| 400 | `invalid_request` | Missing or wrongly typed field, bad `session_id`, or a body that is not valid JSON or is too large. |
 | 400 | `message_too_long` | `message` over 2000 characters. |
 | 403 | `origin_not_allowed` | Request `Origin` is not on the tenant's allowed list. |
-| 404 | `unknown_tenant` | `tenant_id` does not exist (or is not served by this deployment). |
-| 429 | `rate_limited` | Per-IP / per-session limit hit. Include `Retry-After`. |
+| 404 | `unknown_tenant` | `tenant_id` does not exist (or is not served by this deployment mode). |
+| 405 | `method_not_allowed` | Not `POST` or `OPTIONS` (`Allow` header set). |
+| 429 | `rate_limited` | Per-IP or per-session limit hit. Includes `Retry-After` (seconds). |
+| 500 | `internal_error` | Unexpected gateway failure. |
 | 503 | `service_unavailable` | Inference engine or vector store unreachable, or the backend failed before producing a reply. |
 | 504 | `timeout` | The overall time limit passed before the first token. |
 
-The widget displays fixed safe messages and never renders the server error message.
+The gateway may start streaming (`200`) as soon as retrieval is done, before the first token; failures after
+that point arrive as an `error` event instead. The widget displays fixed safe messages and never renders the
+server error message.
 
-## Notes for whoever wires up the real gateway
+## Conversation memory
 
-These are requirements the mock cannot enforce.
-
-1. **Mount `/api/chat` before `requireAuth`** in `gateway/src/server.js`. It is anonymous. It must also be
-   exempt from `validateCsrfOrigin`, which is for cookie-authenticated admin traffic.
-2. **Use a separate CORS policy for this route.** The existing policy is an allowlist with
-   `credentials: true`, built for the dashboard. The widget runs on arbitrary storefront origins. Use
-   `Access-Control-Allow-Methods: POST, OPTIONS`, `Access-Control-Allow-Headers: Content-Type`, no credentials,
-   and ideally a per-tenant allowed-origins list (return `403 origin_not_allowed` otherwise).
-3. **Never trust `tenant_id` for anything but scoping.** It must feed the `$vectorSearch` `tenant_id` pre-filter
-   exactly as in the RAG query standard. Reject tenants that do not exist.
-4. **Apply tenant `agent_config`** (system prompt, tone, temperature, `max_context_chunks`, `similarity_threshold`)
-   server-side. The widget never sends or sees it.
-5. **Rate limit and cap size** (message length, body size). Without auth, this endpoint is an open door to your
-   inference hardware.
-6. **Abort generation when the client disconnects** (`res.on("close")`), as the mock does. Visitors can hit Stop.
-7. **Disable response compression/buffering** on this route, or events will arrive in one lump.
-8. **Out of scope for the widget:** conversation memory. The widget sends one `message` and a `session_id`; if
-   multi-turn context is wanted, the gateway should keep history keyed by `session_id`.
+The widget sends one `message` and a `session_id` per request. Multi-turn context is the gateway's job:
+it keeps a bounded history keyed by tenant and `session_id`. The tenant's `agent_config` is applied
+server-side; the widget never sends or sees it.
 
 ## Optional follow-up metadata and contact submission
 
@@ -182,10 +179,19 @@ The panel warns that email follow-up is not immediate and never promises a live 
 
 Return HTTP 200 with `{"status":"saved"}` only after details are persisted to the
 existing ticket. This means saved for staff review; no email delivery or response time
-is promised. First submission wins; identical retries are idempotent. Errors include
-400 invalid input, 403 invalid/expired capability or origin, 409 conflicting details or
-missing ticket, 429 rate limit, and 503 persistence failure. The widget keeps the form
-available on errors and shows fixed visitor-safe wording.
+is promised. First submission wins; resubmitting identical name and email is idempotent (`saved` again). Errors use the standard envelope:
+
+| Status | `code` | When |
+| :--- | :--- | :--- |
+| 400 | `invalid_request` | Invalid conversation id, tenant, name (1 to 100 characters, no control characters) or email. |
+| 403 | `origin_not_allowed` | `Origin` not on the tenant's allowed list. |
+| 403 | `invalid_follow_up` | Capability token expired, invalid, or for another tenant or session. |
+| 404 | `unknown_tenant` | Tenant does not exist. |
+| 409 | `contact_already_submitted` | Different details were already saved, or the ticket is missing. |
+| 429 | `rate_limited` | Limit hit; includes `Retry-After`. |
+| 503 | `service_unavailable` | Persistence failed or timed out. |
+
+The widget keeps the form available on errors and shows fixed visitor-safe wording.
 
 New chat aborts outstanding replies and contact saves, ignores stale callbacks, clears
 local messages and form data, and persists a new per-tenant session ID. Existing server

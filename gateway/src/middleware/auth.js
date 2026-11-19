@@ -1,3 +1,21 @@
+/**
+ * Session authentication, CSRF origin checks and tenant authorization for the admin API.
+ *
+ * Security model (why it looks like this):
+ * - Sessions are opaque random tokens in an HttpOnly cookie. Only the SHA-256 hash is stored in
+ *   `admin_sessions`, so a database leak does not yield usable cookies.
+ * - Every request re-reads the session, so logout and revocation take effect immediately.
+ * - A session is bound to the APP_MODE it was created in. After a mode switch old cookies are
+ *   rejected, which stops a demo_preset session working against a real-business database.
+ * - Tenant scope comes only from the server-side session. Any tenant id the client supplies
+ *   (path, body, query, X-Tenant-Id) is merely checked against it; conflicting values are refused
+ *   rather than trusting one of them.
+ *
+ * Inputs: Express req/res plus the session and admin_users collections.
+ * Outputs: req.auth = { userId, principalType, tenantId, authorizedTenantIds, appMode, user }.
+ * Callers: server.js (validateCsrfOrigin, requireAuth, CORS origin set), routes/*.js
+ * (authorizeTenantAccess, session helpers).
+ */
 const crypto = require("crypto");
 const {
     getAdminSessionsCollection,
@@ -10,7 +28,7 @@ const {
     isValidTenantId,
 } = require("../config/presets");
 
-const SESSION_COOKIE_NAME = "capstone_session";
+const SESSION_COOKIE_NAME = "ownhelp_session";
 const DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 const TOKEN_HEX_PATTERN = /^[a-f0-9]{64}$/i;
 const COOKIE_NAME_PATTERN = /^[a-zA-Z0-9_-]{3,64}$/;
@@ -23,6 +41,8 @@ function getSessionCookieName(env = process.env) {
     return SESSION_COOKIE_NAME;
 }
 
+// Origins of the admin dashboard (browser app that uses the session cookie). Not the same list as
+// the per-tenant widget origins in chat/origins.js. ALLOWED_ORIGINS extends it for other hosts.
 const DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -68,6 +88,8 @@ function generateRawSessionToken() {
     return crypto.randomBytes(32).toString("hex");
 }
 
+// The Secure flag is added in production or when a TLS-terminating proxy says the request was
+// https; forcing it on plain-http local development would make the browser drop the cookie.
 function isSecureRequest(req) {
     if (process.env.NODE_ENV === "production") return true;
     if (req && req.secure) return true;
@@ -86,6 +108,8 @@ function setSessionCookie(
 ) {
     const cookieName = getSessionCookieName(process.env);
     const maxAgeSec = Math.max(1, Math.floor(ttlMs / 1000));
+    // HttpOnly keeps the token away from page scripts (XSS); SameSite=Lax is the first CSRF
+    // layer, validateCsrfOrigin is the second.
     const parts = [
         `${cookieName}=${encodeURIComponent(rawToken)}`,
         "Path=/",
@@ -176,6 +200,10 @@ async function revokeSessionByRawToken(rawToken) {
 
 /**
  * CSRF / Allowed Origin validation for cookie-authenticated state-changing requests.
+ *
+ * Safe methods pass. For the rest, a cross-site Sec-Fetch-Site or an Origin (else Referer) outside
+ * the allowlist is refused with 403. A request with neither header (curl, server-side) passes:
+ * without a browser there is no ambient cookie to ride, and the session check still applies.
  */
 function validateCsrfOrigin(req, res, next) {
     const method = (req.method || "GET").toUpperCase();
@@ -226,6 +254,11 @@ function validateCsrfOrigin(req, res, next) {
 /**
  * Authentication middleware verifying server-side session, expiration, revocation,
  * principal type, and server APP_MODE binding.
+ *
+ * Responds 401 (and clears the cookie) for every bad-session case with a distinct message but no
+ * detail about other users; 500 only if the session store itself fails. In standard mode the
+ * session must also match a live admin_users row and never a preset tenant, so a deleted or
+ * tampered account loses access at once.
  */
 async function requireAuth(req, res, next) {
     try {
@@ -372,7 +405,11 @@ async function requireAuth(req, res, next) {
 /**
  * Validates all caller-supplied tenant selectors (params, body, query, headers)
  * against the server-verified session's authorized tenant and active APP_MODE.
- * Returns the authorized tenant_id string if valid, or sends an HTTP 400/403 response and returns null.
+ * Returns the authorized tenant_id string if valid, or sends an HTTP 401/403 response and returns null.
+ *
+ * Why every selector is collected and compared: a handler that read only one of them could be
+ * tricked by a second, different value elsewhere in the request (an IDOR / confused-deputy bug).
+ * Callers must stop when this returns null and must use the returned id, never the raw input.
  */
 function authorizeTenantAccess(req, res, explicitTenantId = null) {
     if (!req.auth || !req.auth.tenantId) {

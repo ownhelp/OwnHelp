@@ -2,6 +2,16 @@
  * In-memory sliding-window rate limiter with a bounded number of tracked keys.
  * Limits are passed per call so they can come from environment variables read at request time.
  * State is per process; run a shared store in front of multiple gateway replicas.
+ *
+ * Why sliding window: a fixed window lets a client burst twice the limit across a boundary; this
+ * counts hits in the last `windowMs` exactly. Why bounded keys (maxKeys): the public chat endpoint
+ * is anonymous, so an attacker rotating IPs or session ids must not be able to grow this Map
+ * without limit and exhaust memory; the oldest key is evicted instead (fail open for that key,
+ * never fail the process).
+ *
+ * Input: hit(key, limit, windowMs). Output: { allowed, retryAfterSec } (use for Retry-After).
+ * Callers: routes/chat.js (per-IP and per-session limiters). Login throttling in routes/auth.js
+ * uses its own small failed-attempt map, not this class.
  */
 class SlidingWindowLimiter {
     constructor({ maxKeys = 10000 } = {}) {

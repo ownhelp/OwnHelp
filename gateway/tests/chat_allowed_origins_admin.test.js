@@ -1,3 +1,4 @@
+// Protects: the admin API for a tenant's widget allowed origins (validation, authorization) and its effect on the public chat endpoint.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { createApp } = require("../src/server");
@@ -129,7 +130,7 @@ describe("allowed origins are managed through the admin tenant config API", () =
             method: "PUT",
             headers: {
                 "Content-Type": "application/json",
-                Cookie: `capstone_session=${RAW_TOKEN}`,
+                Cookie: `ownhelp_session=${RAW_TOKEN}`,
                 Origin: "http://localhost:3000",
             },
             body: JSON.stringify(body),

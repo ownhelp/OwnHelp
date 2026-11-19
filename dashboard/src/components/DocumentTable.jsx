@@ -1,7 +1,14 @@
 "use client";
 
+/** Table of a tenant's indexed documents with per-row view and replace (re-upload) actions. */
+
 import React, { useRef, useState } from "react";
 
+/**
+ * Props: documents, loading; onViewDocument (open the viewer); onReuploadDocument (called with
+ * { file, overwrite: true, docId } after the hidden file input picks a file); onSelectTargetDoc
+ * (optional, tells the page which doc the dropzone is replacing).
+ */
 export default function DocumentTable({
     documents = [],
     loading = false,

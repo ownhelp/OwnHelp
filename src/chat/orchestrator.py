@@ -16,6 +16,15 @@ Event sequence for a successful reply::
 ticket on escalation; they are never shown to the visitor.
 
 A failure is reported as ``{"type": "error", "code": ..., "message": ...}`` and ends the stream.
+
+One turn, in order: (1) retrieve tenant-scoped chunks and drop those below the tenant's
+``similarity_threshold``; (2) assemble the prompt: policy + tenant tone as the system message, then
+the question, recent history, retrieved context and verified business contact as the user message;
+(3) generate with Ollama under the ``SupportResponse`` JSON schema, buffering the raw JSON; (4) validate
+it and run the handoff-promise safeguard, which rewrites unsupported "someone will contact you"
+answers into an escalation; (5) emit the answer and the internal action. Escalation itself (opening a
+ticket) is done by the gateway from the ``done`` event, not here.
+Callers: ``src/chat/server.py`` (``orchestrator.stream``). Inputs: ``ChatServiceRequest``.
 """
 
 import json
@@ -46,6 +55,8 @@ class AgentConfig(BaseModel):
 
 
 class ChatTurn(BaseModel):
+    """One earlier message in the visitor conversation (history is capped at MAX_HISTORY_TURNS)."""
+
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1, max_length=8000)
 
@@ -58,6 +69,10 @@ class BusinessContact(BaseModel):
 
 
 class ChatServiceRequest(BaseModel):
+    """Body of POST /v1/chat. The gateway checks tenant_id against its businesses collection and
+    fills agent_config and business_contact from that record; the strict tenant_id pattern also
+    rejects odd characters before they reach a query."""
+
     tenant_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     query: str = Field(min_length=1, max_length=2000)
     history: list[ChatTurn] = Field(default_factory=list, max_length=MAX_HISTORY_TURNS)
@@ -71,13 +86,22 @@ def build_system_prompt(config: AgentConfig) -> str:
 
 
 class ChatOrchestrator:
+    """Runs one visitor turn: retrieve, build the prompt, generate, validate and emit events."""
+
     def __init__(self, retriever, client: SupportInferenceClient):
+        # Locks serialize use of the shared embedding model and the single local model server;
+        # the HTTP server is threaded, so concurrent visitors would otherwise interleave on them.
         self.retriever = retriever
         self.client = client
         self._retriever_lock = threading.Lock()
         self._model_lock = threading.Lock()
 
     def _retrieve(self, request: ChatServiceRequest):
+        """Returns this tenant's chunks that clear the similarity threshold (possibly none).
+
+        Follow-up questions such as "what about returns?" embed poorly alone, so the last two user
+        questions are prepended to the retrieval query only (not to the prompt).
+        """
         config = request.agent_config
         previous_queries = [turn.content for turn in request.history if turn.role == "user"][-2:]
         retrieval_query = request.query
@@ -99,6 +123,7 @@ class ChatOrchestrator:
         ]
 
     def stream(self, request: ChatServiceRequest) -> Iterator[dict]:
+        """Yields the event dicts described in the module docstring for one visitor message."""
         config = request.agent_config
         try:
             chunks = self._retrieve(request)
@@ -164,6 +189,15 @@ class ChatOrchestrator:
             log_result("Support response raw_action=%s effective_action=%s safeguard=%s",
                        raw_action, response.action, reason)
             # Buffer until validation and capability checks finish: unsafe text cannot be retracted.
+            # TODO(streaming): Current: the whole structured-JSON reply is buffered, validated and sent
+            # as ONE token event, so visitors wait for full generation. Target: emit token events as the
+            # model produces them, feeding raw chunks to src/chat/answer_stream.AnswerStreamer. Hard
+            # because the model returns structured JSON: the answer field must be extracted
+            # incrementally while the full reply is still validated, and the handoff safeguard and the
+            # escalate decision (the ``action`` field, which can arrive after the answer) must not leak
+            # early, since already-sent text cannot be retracted. The gateway
+            # (gateway/src/routes/chat.js onToken -> SSE "token") and the widget
+            # (widget/src/lib/chatClient.js "token" handler) already accept many token events.
             yield {"type": "token", "text": response.answer}
             # action / confidence / cited_sources are for the gateway only (human escalation review);
             # the gateway never forwards them to the visitor.

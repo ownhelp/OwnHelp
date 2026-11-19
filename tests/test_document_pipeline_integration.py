@@ -1,4 +1,4 @@
-"""Offline integration checks on independent, disposable document fixtures."""
+"""Protects the structured document-to-chunk pipeline (parser, chunk provenance, ingestion wiring) on disposable fixtures, offline."""
 
 import json
 import os

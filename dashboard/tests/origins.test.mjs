@@ -1,3 +1,4 @@
+// Protects allowed-widget-origin parsing and the rule that an untouched field is never sent on save.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { originsToText, parseOriginsInput, widgetConfigPayload } from "../src/lib/origins.mjs";

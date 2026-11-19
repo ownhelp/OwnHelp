@@ -1,5 +1,5 @@
 {
-    "name": "gateway",
+    "name": "ownhelp-gateway",
     "version": "0.1.0",
     "private": true,
     "description": "Self-Hosted Orchestration Gateway for Multi-Tenant Customer Support AI",

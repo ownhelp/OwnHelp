@@ -1,4 +1,4 @@
-"""HF credentials are passed to model loading without printing or persisting them."""
+"""Protects credential handling: the optional HF token reaches embedding-model loading without being printed or persisted."""
 import importlib
 import unittest
 from unittest.mock import patch

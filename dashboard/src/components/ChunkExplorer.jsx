@@ -1,9 +1,24 @@
 "use client";
 
+/**
+ * Read-only, paged browser for a tenant's stored vector chunks (doc_vectors) with a detail view.
+ *
+ * TODO(chunk-editing): manual chunk editing is the next feature (the "[v2.1 preview]" badges below
+ * mark it). Needed: edit and delete controls here; new gateway routes in routes/documents.js (see
+ * the TODO(chunk-editing) there); re-embedding of an edited chunk with the same model; and a
+ * warning when an edited chunk exceeds MAX_MODEL_TOKENS. Remove both badges when it ships.
+ */
+
 import React, { useState } from "react";
 
+// Token budget of the embedding model; chunks above it are flagged because they get truncated.
 const MAX_MODEL_TOKENS = 512;
 
+/**
+ * Props: chunks, total, page, totalPages, loading (page data from the gateway); documents (for the
+ * filter dropdown); selectedDocId and searchQuery (controlled filters); onChangeDocFilter,
+ * onChangeSearch, onChangePage (callbacks; the parent page does the fetching).
+ */
 export default function ChunkExplorer({
     chunks = [],
     total = 0,

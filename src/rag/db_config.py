@@ -2,6 +2,12 @@
 
 MONGODB_DB_NAME is the production database. Everything used for training, synthetic data and
 evaluation must read MONGODB_TRAINING_DB_NAME instead, and must never fall back to production.
+
+Inputs: an environment mapping (defaults to ``os.environ``). Output: the database name string.
+Callers: dev/eval/training scripts under ``scripts/``. Note that the runtime retriever and ingestor
+resolve ``MONGODB_DB_NAME`` (default ``rag_knowledge_base``) themselves; the URI always comes from
+``MONGODB_URI``. The hard failure here is deliberate so a missing variable can never silently
+point evaluation or training at the demo database.
 """
 
 import os

@@ -1,9 +1,24 @@
+/**
+ * MongoDB connection holder and collection accessors for the whole gateway.
+ *
+ * Why: every route reaches the database through these getters so the active database name
+ * (config/mode.js) is resolved in one place; a route can never hard-code a database and cross the
+ * standard / preset_training boundary. Collections: businesses, doc_vectors (name overridable via
+ * MONGODB_COLLECTION_NAME), ticket_logs, admin_users, admin_sessions.
+ *
+ * Inputs: MONGODB_URI plus the mode variables. Outputs: lazily connected collection handles.
+ * Callers: server.js (connectToDatabase at startup) and every router/middleware. Tests inject an
+ * in-memory fake with setDatabaseAdapter(), so no test touches a real cluster.
+ */
 const path = require("path");
 const { MongoClient } = require("mongodb");
 const dotenv = require("dotenv");
 const { PRESET_TENANTS, SAMPLE_TICKETS } = require("../config/presets");
 const { resolveRuntimeConfig } = require("../config/mode");
 
+// TODO(gateway-cleanup): config/env.js already loads .env files at startup (and logs which ones),
+// so these two dotenv calls are redundant and use a different search order. Remove them once
+// tests that require this module without env.js are checked.
 // Load .env from project root without clobbering explicit CLI environment variables
 const rootEnvPath = path.resolve(__dirname, "../../../.env");
 dotenv.config({ path: rootEnvPath, override: false });
@@ -35,6 +50,8 @@ async function ensureIndexes(db) {
     await adminSessions.createIndex({ expires_at: 1 });
 }
 
+// Only ever called in preset_training mode. $setOnInsert plus upsert keeps seeding idempotent and
+// guarantees a restart never overwrites edits made to the preset tenants or tickets.
 async function seedPresetTrainingData(db) {
     const businesses = db.collection("businesses");
     const ticketLogs = db.collection("ticket_logs");
@@ -98,6 +115,8 @@ function resetDatabaseAdapter() {
     customDbAdapter = null;
 }
 
+// Reconnects only when the active database name changes; the MongoClient itself is shared.
+// Placeholder URIs from .env.example are rejected up front so the failure message is actionable.
 async function connectToDatabase(env = process.env) {
     const runtimeConfig = resolveRuntimeConfig(env);
     const { appMode, activeDbName } = runtimeConfig;

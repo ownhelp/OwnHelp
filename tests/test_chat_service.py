@@ -1,4 +1,4 @@
-"""Offline checks for the internal chat service behind the gateway's POST /api/chat."""
+"""Protects the internal chat service behind the gateway's POST /api/chat: event stream shape, token auth, cross-tenant rejection, answer-field streaming and env/DB-name resolution (offline)."""
 
 import json
 import os
