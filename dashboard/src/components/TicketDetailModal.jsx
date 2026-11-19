@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Modal for reviewing one ticket: conversation, model answer and rationale, retrieved context
+ * chunks, optional visitor contact details with a prefilled mailto link, admin notes and status
+ * actions.
+ */
+
 import React, { useState, useEffect } from "react";
 import {
     getScoreBadgeClasses,
@@ -7,6 +13,7 @@ import {
     getEscalationBadge,
 } from "./TicketTable";
 
+// Splits on bracketed spans so cited chunk references stand out; plain text is left untouched.
 function renderHighlightedRationale(rationaleText) {
     if (!rationaleText) return null;
     // Highlight bracketed citations like [CARE_GUIDE#1. Vegetable-Tanned Leather Maintenance]
@@ -40,6 +47,10 @@ function getRoleBadge(role) {
     };
 }
 
+/**
+ * Props: ticket (renders nothing when falsy); tenantName (used in the mailto subject/body);
+ * onClose; onUpdateTicket (ticketId, { status, admin_notes }); updating (disables the actions).
+ */
 export default function TicketDetailModal({
     ticket,
     tenantName = "",

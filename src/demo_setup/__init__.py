@@ -1,4 +1,4 @@
-"""Demo setup, deterministic fixture seeding, target validation, and local vector index verification."""
+"""Demo setup package: deterministic fixture seeding, target validation and local vector index verification."""
 
 from .seeder import (
     ALLOWED_DEMO_HOSTS,

@@ -1,3 +1,13 @@
+"""Tenant-scoped vector retrieval over the ``doc_vectors`` collection.
+
+Inputs: a visitor query string and a ``tenant_id`` (plus optional top_k / diversity settings).
+Outputs: a list of chunk dicts (text, doc_id, section, provenance fields, ``score``, and
+``rerank_score`` when a cross-encoder is configured), and ``format_context`` to turn them into
+prompt blocks.
+Callers: ``src/chat/orchestrator.py`` (live chat), ``src/demo_setup`` and evaluation scripts under
+``scripts/``. This is the single place where tenant isolation is enforced for retrieval.
+"""
+
 import os
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -5,10 +15,14 @@ from dotenv import load_dotenv, find_dotenv
 from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer
 
+# BGE models were trained with this instruction on the *query* side only; omitting it measurably
+# lowers recall, while adding it to stored documents would skew their embeddings.
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 class RAGRetriever:
+    """Embeds a query and runs an Atlas ``$vectorSearch`` pre-filtered to one tenant."""
+
     def __init__(
         self,
         mongo_uri: Optional[str] = None,
@@ -70,7 +84,12 @@ class RAGRetriever:
         self._reranker = None
 
     def _rerank(self, query: str, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Reorders candidates by cross-encoder relevance and drops those under the cutoff."""
+        """Reorders candidates by cross-encoder relevance and drops those under the cutoff.
+
+        The cross-encoder reads query and chunk together, so it is more precise than the bi-encoder
+        cosine score; the original score is kept as ``vector_score``. ``min_rerank_score`` is the
+        relevance floor that lets the orchestrator treat "nothing relevant" as an empty result.
+        """
         if not self.reranker_model_name or not chunks:
             return chunks
         if self._reranker is None:
@@ -99,9 +118,15 @@ class RAGRetriever:
             raise ValueError("tenant_id is required for retrieval.")
 
         query_embedding = self.model.encode(self.query_prefix + query).tolist()
+        # Over-fetch so the per-document diversity cap (and the optional reranker) have spare
+        # candidates to choose from; without diversity we only need top_k.
         fetch_limit = max(top_k * 4, 20) if max_per_doc else top_k
         if self.reranker_model_name:
             fetch_limit = max(fetch_limit, self.rerank_candidates)
+        # numCandidates is the ANN search breadth and must be >= limit (Atlas rejects otherwise).
+        # Using max(num_candidates, fetch_limit) keeps recall high (default 100) while staying valid.
+        # The tenant_id filter is applied inside $vectorSearch (pre-filter), so other tenants'
+        # vectors are never scored. It requires tenant_id to be a "filter" field in the index.
         pipeline = [
             {
                 "$vectorSearch": {
@@ -135,7 +160,9 @@ class RAGRetriever:
         ]
         raw_results = list(self.collection.aggregate(pipeline))
 
-        # Defense in depth: drop anything that is not this tenant's
+        # Defense in depth: drop anything that is not this tenant's (also covers injected test
+        # collections that ignore the $vectorSearch filter). Reranking happens after this so a
+        # foreign chunk can never be promoted by the cross-encoder.
         filtered_results = self._rerank(query, [r for r in raw_results if r.get("tenant_id") == tenant_id])
 
         if not max_per_doc:

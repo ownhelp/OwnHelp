@@ -1,4 +1,11 @@
-"""Read-only Ollama provenance; discovery never loads or generates with a model."""
+"""Read-only Ollama provenance; discovery never loads or generates with a model.
+
+Inputs: an ``ollama.Client``, the requested model name and the request options. Output: a dict
+recording model digest, template hash, effective sampling options and context length (configured
+or observed), with ``capture_status`` "recorded" or "incomplete". It exists so evaluation results
+can state exactly which model build and settings produced them.
+Callers: ``SupportInferenceClient.get_serving_metadata`` and evaluation scripts.
+"""
 
 import hashlib
 import json
@@ -6,6 +13,7 @@ from collections.abc import Mapping
 
 
 def response_dict(response):
+    """Normalizes an Ollama response (mapping or pydantic object, depending on client version) to a dict."""
     if isinstance(response, Mapping):
         return dict(response)
     if hasattr(response, "model_dump"):

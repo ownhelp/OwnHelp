@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * Ticket review route ("/tickets"): lists the active tenant's logged interactions with status
+ * filters and search, and opens TicketDetailModal to review a ticket and change its status.
+ */
+
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useTenant } from "@/context/TenantContext";

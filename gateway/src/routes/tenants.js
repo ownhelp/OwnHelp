@@ -1,3 +1,16 @@
+/**
+ * Tenant profile and runtime-configuration routes, mounted at /api/tenants behind requireAuth.
+ *
+ * Purpose: the dashboard reads and edits the `businesses` document: name, contact details,
+ * agent_config (prompt, tone, temperature, retrieval limits) and widget_config.allowed_origins.
+ * The chat route reads these same fields on every message, so edits apply without a restart.
+ *
+ * Security: the tenant comes from the session via authorizeTenantAccess; PUT only writes fields
+ * that pass validateAndBuildUpdate (an allowlist), and assistant_policy is read-only so an admin
+ * cannot weaken the shared base safety prompt. Mode rules hide preset tenants in standard mode.
+ *
+ * Callers: the dashboard settings page.
+ */
 const express = require("express");
 const { getBusinessesCollection } = require("../db/mongo");
 const { getAppMode } = require("../config/mode");
@@ -157,6 +170,7 @@ function validateAndBuildUpdate(body) {
 
 /**
  * GET /api/tenants
+ * Auth: session cookie. Response 200 array with exactly the session's own tenant (or []).
  * Returns ONLY the tenant(s) authorized for the current session.
  * In standard mode, preset tenants are strictly excluded even if old seeded records exist.
  */
@@ -213,6 +227,8 @@ router.get("/", async (req, res) => {
 
 /**
  * GET /api/tenants/:tenantId/config
+ * Auth: session cookie. Response 200 the tenant document plus read-only assistant_policy; 403
+ * tenant mismatch; 404 missing.
  * Returns specific tenant configuration document if and only if authorized for the session.
  */
 router.get("/:tenantId/config", async (req, res) => {
@@ -250,6 +266,8 @@ router.get("/:tenantId/config", async (req, res) => {
 
 /**
  * PUT /api/tenants/:tenantId/config
+ * Auth: session cookie (+ CSRF origin check). Response 200 updated document; 400 validation
+ * (details[]); 403; 404. Partial update: omitted fields are untouched.
  * Validates and updates name, contact_email, industry, team_name, and agent_config using $set.
  */
 router.put("/:tenantId/config", async (req, res) => {

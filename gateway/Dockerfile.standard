@@ -43,7 +43,7 @@ COPY scripts ./scripts
 # reserve the preset tenant IDs. Only the manifest is copied: no tenant documents or datasets.
 COPY data/fixtures/demo_manifest.json ./data/fixtures/demo_manifest.json
 COPY --from=widget-build /widget/dist/widget.js ./widget/dist/widget.js
-RUN mkdir -p /tmp/capstone_uploads /cache/huggingface
+RUN mkdir -p /tmp/ownhelp_uploads /cache/huggingface
 WORKDIR /app/gateway
 EXPOSE 4000
 CMD ["node", "src/server.js"]

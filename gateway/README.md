@@ -1,113 +1,162 @@
 # Orchestration Gateway (`gateway/`)
 
-Express backend connecting the Next.js Support Admin Console (`dashboard/`), MongoDB Atlas (`businesses`, `doc_vectors`, `ticket_logs`, `admin_users`, `admin_sessions`), and the Python ingestion workers (`scripts/ingest_uploaded_document.py`).
+The Express service between the browser and everything else. It owns authentication, tenant
+isolation and the public chat endpoint; it never runs the model or computes embeddings itself.
 
----
-
-## 1. Server Modes & Database Isolation
-
-The Gateway enforces two mutually exclusive server-controlled modes via `APP_MODE`:
-
-| `APP_MODE` | Purpose | Database Used | Seeding & Preset Access | Authentication |
-| :--- | :--- | :--- | :--- | :--- |
-| `standard` *(default)* | Real business deployment & onboarding | `MONGODB_DB_NAME` *(defaults to `rag_knowledge_base`)* | Seeds **nothing**. Reserved preset tenants (`iron_and_oak`, `cinder_and_salt`, `harbor_view`, `kettle_and_loom`, `northstar_auto`) and `data/<preset_tenant>/` disk fallbacks are strictly blocked and hidden, even if old seeded records exist in the database. | Standard Admin Signup (`POST /api/auth/signup`) & Email/Password Login (`POST /api/auth/login`). `POST /api/auth/demo-login` is disabled (`403`). |
-| `preset_training` | Synthetic development & preset evaluation | `MONGODB_TRAINING_DB_NAME` *(must be explicitly set and distinct from `MONGODB_DB_NAME`)* | Idempotently seeds the 5 preset businesses and 12 sample multi-turn tickets into `MONGODB_TRAINING_DB_NAME`. | One-click passwordless Demo Login (`POST /api/auth/demo-login`) issuing `demo_preset` sessions scoped to a single preset tenant. |
-
-> **Fail-Closed Startup:** Any invalid `APP_MODE` value, or starting with `APP_MODE=preset_training` without an explicit `MONGODB_TRAINING_DB_NAME` distinct from `MONGODB_DB_NAME`, terminates startup immediately.
-
----
-
-## 1B. Configuration Comes From `.env`
-
-The gateway reads its settings from the repository-root `.env` (copy `.env.example` to get started), so `npm run dev` or `npm start` needs nothing passed on the command line. Order of precedence, highest first:
-
-1. Variables already in the process environment (shell exports, inline `VAR=value npm run dev`, Docker `environment:`).
-2. `<repo root>/.env`
-3. `gateway/.env`
-
-Existing variables are never overridden by a file, so a one-off override is still `VAR=value npm run dev`. Missing files are ignored. At startup the gateway logs which env files it loaded (file names only, never values). The same rule applies to the internal chat service (`scripts/run_chat_service.py`), which reads the same root `.env`. Restart the process after editing `.env`.
-
----
-
-## 2. Running in `standard` Mode (Default)
-
-In `standard` mode, administrators register their own business via `/signup` ("Get to Know You" onboarding) and sign in with email and password at `/login`.
-
-```bash
-# Terminal 1: Start the Orchestration Gateway (APP_MODE=standard and MONGODB_DB_NAME come from .env)
-cd gateway
-npm run dev
-
-# Terminal 2: Start the Next.js Admin Dashboard
-cd dashboard
-npm run dev
+```
+Dashboard (Next.js)  --cookie session-->  Gateway  --> MongoDB (businesses, doc_vectors, ticket_logs,
+                                             |                   admin_users, admin_sessions)
+Storefront widget    --anonymous POST-->     |      --> Python chat service (retrieval + Ollama)
+                                             +--------> Python ingestion worker (document uploads)
 ```
 
-Open `http://localhost:3000/signup` to create an administrator account and provision a tenant workspace, or `http://localhost:3000/login` to sign in.
+What it does, with the entry point in [src/server.js](src/server.js):
 
----
+- **Auth**: signup, login, logout and server-side sessions for dashboard administrators.
+- **Tenants**: read and edit a business's profile, agent configuration and widget allowed origins.
+- **Documents**: upload, list and inspect documents and vector chunks (ingestion is delegated to
+  `scripts/ingest_uploaded_document.py`).
+- **Tickets**: the human-review queue, including tickets created by chat escalations.
+- **Widget and chat proxying**: serves `/widget.js` and `POST /api/chat`, which validates the
+  request, checks the tenant's origin allowlist and rate limits, then streams the reply from the
+  internal Python chat service. Contract: [widget/API_CONTRACT.md](../widget/API_CONTRACT.md).
 
-## 3. Running in `preset_training` Mode (One-Click Demo Login)
+Source layout: `src/config` (env, mode, presets), `src/db` (Mongo, vector index setup),
+`src/middleware` (auth, rate limiter), `src/routes` (one file per area), `src/chat` (backend client,
+origins, history, escalation, follow-up). Every file starts with a header comment explaining its
+role.
 
-To inspect the 5 synthetic training businesses (`iron_and_oak`, `cinder_and_salt`, `harbor_view`, `kettle_and_loom`, `northstar_auto`) using the existing `capstone_dev` development database without passwords:
+## Server modes and database isolation
 
-Set `APP_MODE=preset_training` and `MONGODB_TRAINING_DB_NAME=capstone_dev` in `.env` (the training DB must differ from `MONGODB_DB_NAME`), or pass them for a single run:
+`APP_MODE` selects one of two mutually exclusive modes. It is set by the operator, never by a
+request.
 
-```bash
-# Terminal 1: Start the Gateway in preset_training mode with explicit training DB
-cd gateway
-APP_MODE=preset_training MONGODB_TRAINING_DB_NAME=capstone_dev npm run dev
+| | `standard` (default) | `preset_training` |
+| :--- | :--- | :--- |
+| Purpose | A real business | Synthetic development and demo of the five preset tenants |
+| Database | `MONGODB_DB_NAME` (default `rag_knowledge_base`) | `MONGODB_TRAINING_DB_NAME` (required, must differ from `MONGODB_DB_NAME`) |
+| Seeding | None | Idempotently seeds the preset businesses and sample tickets from `data/fixtures/demo_manifest.json` |
+| Sign in | `POST /api/auth/signup` and `/login` (email + password) | `POST /api/auth/demo-login` (passwordless, one preset tenant) |
+| Preset tenant ids | Hidden and rejected everywhere, even if old preset records exist | The only tenants served |
 
-# Terminal 2: Start the Next.js Admin Dashboard
-cd dashboard
-npm run dev
+Startup fails closed: an unknown `APP_MODE`, an empty `MONGODB_DB_NAME`, a training database equal to
+the standard one, or `preset_training` without `MONGODB_TRAINING_DB_NAME` stops the process before it
+connects. Sessions record the mode they were created in and are rejected after a mode change, so a
+demo session can never act on a real database.
+
+## Configuration
+
+Settings are read from the process environment, then `<repo root>/.env`, then `gateway/.env`. A file
+never overrides an existing variable. At startup the gateway logs which files were loaded (names
+only, never values). Restart after editing `.env`. Chat settings are re-read on every request.
+
+| Variable | Default | Meaning |
+| :--- | :--- | :--- |
+| `PORT` | `4000` | Listen port. |
+| `APP_MODE` | `standard` | `standard` or `preset_training` (see above). |
+| `MONGODB_URI` | none, required | MongoDB connection string. Placeholder values are rejected. |
+| `MONGODB_DB_NAME` | `rag_knowledge_base` | Database used in `standard` mode. |
+| `MONGODB_TRAINING_DB_NAME` | none | Database used in `preset_training` mode. Required there. |
+| `MONGODB_COLLECTION_NAME` | `doc_vectors` | Vector chunk collection name. |
+| `MONGODB_VECTOR_INDEX_NAME` | `vector_index` | Atlas Vector Search index name. |
+| `VECTOR_INDEX_AUTO_SETUP` | `true` | Create the collections and index on boot. `false`, `0`, `no` or `off` disables it. |
+| `VECTOR_INDEX_DIMENSIONS` | `384` | Expected embedding dimensions (1 to 4096). |
+| `VECTOR_INDEX_POLL_MS` / `VECTOR_INDEX_POLL_MAX` | `10000` / `90` | Poll interval and count while Atlas builds the index. |
+| `SESSION_COOKIE_NAME` | `ownhelp_session` | Session cookie name (3 to 64 letters, digits, `_`, `-`). Set a different name to run two gateways on one host without cookie collisions. |
+| `ALLOWED_ORIGINS` | none | Extra comma-separated dashboard origins, added to the built-in `http://localhost:3000` and `http://127.0.0.1:3000` (admin CORS and CSRF check). |
+| `LOGIN_RATE_LIMIT_MAX` | `8` | Failed logins per IP and email within 15 minutes before `429`. |
+| `NODE_ENV` | none | `production` always sets the `Secure` flag on the session cookie. |
+| `TRUST_PROXY` | unset | Express `trust proxy` value (for example `1`) so `req.ip` is the real client behind a reverse proxy. Needed for correct rate limiting there. |
+| `UPLOAD_STAGING_DIR` | `/tmp/uploads` | Where uploads are staged before ingestion. Files are deleted after each request. |
+| `PYTHON_EXECUTABLE` | unset | Interpreter for the ingestion worker. Otherwise `.venv/bin/python`, then `uv run`. |
+| `CHAT_BACKEND_URL` | `http://127.0.0.1:8100` | Internal Python chat service. |
+| `CHAT_BACKEND_TOKEN` | empty | Shared secret sent as `X-Chat-Backend-Token`; set the same value on the chat service. Required whenever that service is reachable from another host. |
+| `CHAT_FOLLOW_UP_SECRET` | random per process | Key for follow-up capability tokens. Set a strong value, identical across replicas, to keep forms valid across restarts. |
+| `WIDGET_DEFAULT_ALLOWED_ORIGINS` | unset (reject all) | Comma-separated origins for tenants without their own list. |
+| `WIDGET_DIST_PATH` | `widget/dist/widget.js` | Bundle served at `/widget.js`. |
+| `CHAT_RATE_LIMIT_PER_IP` | `30` | Chat requests per IP per window. |
+| `CHAT_RATE_LIMIT_PER_SESSION` | `10` | Chat (and contact) requests per tenant session per window. |
+| `CHAT_RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window length. |
+| `CHAT_MAX_DURATION_MS` | `120000` | Hard cap on one reply; ends with a `timeout` error event. |
+| `CHAT_HEARTBEAT_MS` | `10000` | SSE `: ping` interval while a slow model reads the prompt. |
+| `CHAT_PRE_STREAM_WAIT_MS` | `3000` | How long to wait for the first token before committing to a `200` stream. A backend that fails inside this window gets a real `503`. `0` commits immediately. |
+| `CHAT_HISTORY_MAX_MESSAGES` | `8` | Turns remembered per tenant session, at most 12. |
+| `OLLAMA_HOST` / `OLLAMA_MODEL` | `http://127.0.0.1:11434` / `llama3.2:3b` | Only used by `/api/health` to report whether the model server is reachable and has the model. |
+
+Invalid numeric chat values fall back to their defaults instead of failing.
+
+## Routes
+
+"Session" means a valid session cookie scoped to the tenant in the URL, plus the CSRF origin check
+for state-changing methods. Rate limits apply only where listed; the admin routes have none beyond
+login throttling.
+
+| Method and path | Auth | Rate limit | Purpose |
+| :--- | :--- | :--- | :--- |
+| `GET /api/health` | none | none | Readiness flags: database, vector index, Ollama. Always `200`. |
+| `GET /api/auth/config` | none | none | Server mode and, in `preset_training`, the preset tenants. |
+| `POST /api/auth/signup` | none, `standard` only | none | Create an admin and its tenant, start a session. |
+| `POST /api/auth/login` | none, `standard` only | failed attempts per IP and email | Email and password sign in. |
+| `POST /api/auth/demo-login` | none, `preset_training` only | none | Passwordless session for one preset tenant. |
+| `GET /api/auth/session` | session | none | Current user and tenant. |
+| `POST /api/auth/logout` | session | none | Revoke the session and clear the cookie. |
+| `GET /api/tenants` | session | none | The session's own tenant only. |
+| `GET /api/tenants/:tenantId/config` | session | none | Tenant document plus read-only `assistant_policy`. |
+| `PUT /api/tenants/:tenantId/config` | session | none | Update profile, `agent_config`, `widget_config.allowed_origins`, contact fields. |
+| `POST /api/documents/upload` | session | none | Upload `.md` or `.json` (10 MB) and ingest it. Returns the JSON summary, or an NDJSON stage stream when the request sends `Accept: application/x-ndjson` (see below). Re-ingesting a `doc_id` inserts the new chunks before deleting the old ones, so a failed insert never leaves the document empty. |
+| `GET /api/tenants/:tenantId/documents` | session | none | Documents with chunk counts. |
+| `GET /api/tenants/:tenantId/documents/:docId` | session | none | One document's text and chunks. |
+| `GET /api/tenants/:tenantId/chunks` | session | none | Paginated vector chunks (embedding vectors omitted). |
+| `GET /api/tenants/:tenantId/tickets` | session | none | Tickets, optional `status` and `search`. |
+| `POST /api/tickets`, `POST /api/tenants/:tenantId/tickets` | session | none | Create a ticket. |
+| `PATCH /api/tickets/:ticketId` | session | none | Update status, notes, contact or summary. |
+| `GET /widget.js` | none | none | The embeddable widget bundle. |
+| `POST /api/chat` | none (anonymous) | per IP, per session | Grounded reply as SSE, or one JSON body without `Accept: text/event-stream`. 16 KB body cap. |
+| `POST /api/chat/contact` | follow-up token | per IP, per session | Save a visitor's name and email on an escalated ticket. 8 KB body cap. |
+
+### Streaming upload progress
+
+`POST /api/documents/upload` with `Accept: application/x-ndjson` answers `200` with
+`Content-Type: application/x-ndjson` and one JSON object per line:
+
+```
+{"event":"stage","stage":"uploading"}
+{"event":"stage","stage":"parsing"}
+{"event":"stage","stage":"embedding"}
+{"event":"stage","stage":"writing"}
+{"event":"done","status":"success","tenant_id":"...","doc_id":"...","chunks_created":3}
 ```
 
-1. Open `http://localhost:3000/login`.
-2. The dashboard queries `GET /api/auth/config`, detects `app_mode: "preset_training"`, and renders **Quick Demo Login (No Password)** buttons for the 5 preset tenants.
-3. Clicking any preset calls `POST /api/auth/demo-login` with `{ "tenant_id": "<preset_id>" }`, which issues an `HttpOnly` session cookie scoped to that single preset tenant. Switching presets in the sidebar revokes the prior preset session and issues a new one.
+Stages are real: the ingestion worker prints one `{"event":"stage",...}` line per stage on stdout and
+the gateway relays it. The final line is `done` (the same summary the JSON mode returns) or
+`{"event":"error","error":"<CODE>","message":"..."}`. Errors never carry stack traces, file paths or
+raw process output. Failures that happen before streaming starts (no session, wrong tenant, missing
+file, bad `doc_id`) are still ordinary `4xx` JSON. Without that `Accept` header the route behaves
+exactly as before. Tests inject a fake worker with `setIngestionRunner(fn)`; `fn` receives
+`{ filePath, tenantId, overwrite, docId, dbName, onStage }` (`onStage` only in streaming mode).
 
----
+`/widget.js` and `/api/chat` are mounted before the admin CORS policy, CSRF check and
+authentication on purpose: they are public and credential-free, so they carry their own origin
+allowlist and limits instead. Everything under `/api` registered after `requireAuth` in
+`server.js` needs a session.
 
-## 3B. Optional Client-Training Docker Sandbox
+## Widget origins and CORS
 
-To run the complete local demo stack (`mongodb/mongodb-atlas-local:8.0` with local `$vectorSearch`, deterministic fixture seeding from `data/fixtures/demo_manifest.json`, `gateway-demo`, and `dashboard-demo`) from `examples/client-training/` isolated from any standard instance on ports `3001` / `4001` / `27018`:
+Two separate policies:
 
-```bash
-# From the repository root:
-bash examples/client-training/scripts/setup.sh
+- **Admin API**: CORS allows only the dashboard origins (`http://localhost:3000`,
+  `http://127.0.0.1:3000`, plus `ALLOWED_ORIGINS`) with credentials. State-changing requests whose
+  `Origin` (or `Referer`) is outside that set, or that the browser marks cross-site, get `403`.
+- **Public chat**: no credentials. The `Origin` header is checked against the tenant's own list in
+  `businesses.widget_config.allowed_origins` (exact `http(s)` origins, no wildcards or paths, at most
+  50), set through `PUT /api/tenants/:tenantId/config`. A tenant without that field uses
+  `WIDGET_DEFAULT_ALLOWED_ORIGINS`, which has no built-in value, so with neither set every browser
+  origin gets `403 origin_not_allowed`. A tenant's own list wins over the fallback, and an explicit
+  empty array allows no browser origin. Requests with no `Origin` (curl, servers) skip the list but
+  still hit the rate limits. Preflights are answered without a tenant, so the list is enforced on the
+  `POST` itself.
 
-# Check health, vector index readiness, and Ollama reachability:
-curl -s http://localhost:4001/api/health | python3 -m json.tool
-
-# Reset only the local demo containers and volumes (never touches standard/Atlas data):
-bash examples/client-training/scripts/setup.sh reset
-```
-
-Pass `--with-ollama` to run a bundled Ollama container inside the demo project instead of using host Ollama (see [examples/client-training/README.md](../examples/client-training/README.md) for all commands). This gateway has no Dockerfile of its own; the demo image is built from `examples/client-training/Dockerfile.gateway`.
-
-The containerized demo uses `SESSION_COOKIE_NAME=capstone_demo_session` and `UPLOAD_STAGING_DIR=/tmp/capstone_demo_uploads` so it can run side-by-side with a standard instance on `:3000` / `:4000` without session or file staging collisions.
-
-The demo also starts `chat-service-demo` (the internal chat service described in section 5), reachable only from the gateway on the compose network. Its database is `MONGODB_TRAINING_DB_NAME` because the demo gateway runs in `preset_training` mode. The Docker image builds the widget bundle itself (multi-stage build), so `/widget.js` works without a local `npm run build`. The full image build, including the PyTorch layer, has not been exercised end to end; only the widget stage and `docker compose config` have.
-
----
-
-## 4. Running Automated Security & Authorization Tests
-
-```bash
-cd gateway
-npm test
-```
-
-The test suite runs entirely against an in-memory MongoDB mock and mocked Python ingestion runner (never mutating live Atlas databases). The public chat tests also use a scripted mock chat backend and a stub HTTP chat service, so no model, embedding download or network access is needed.
-
-The Python side of the chat service has its own offline tests: `uv run python -m unittest tests.test_chat_service` from the repository root.
-
----
-
-## 5. Public Chat Endpoint & Embeddable Widget
-
-Third-party storefronts embed the chat widget with one tag:
+Embed snippet:
 
 ```html
 <script src="https://GATEWAY_HOST/widget.js"
@@ -116,100 +165,108 @@ Third-party storefronts embed the chat widget with one tag:
         defer></script>
 ```
 
-| Route | Auth | Purpose |
-| :--- | :--- | :--- |
-| `GET /widget.js` | none | Serves `widget/dist/widget.js` (read from the build output on each request, with ETag). Override the location with `WIDGET_DIST_PATH`. |
-| `POST /api/chat` | none (anonymous) | Streams a grounded reply as SSE, or returns one JSON body when `Accept` lacks `text/event-stream`. Contract: `widget/API_CONTRACT.md`. |
-
-Both are mounted **before** the admin CORS policy, CSRF origin check and `requireAuth` (see `src/server.js`). `/api/chat` has its own CORS policy (`POST, OPTIONS`, `Content-Type` only, no credentials), per-tenant origin allowlist, per-IP and per-session rate limits, and a 16 KB body cap.
-
-### How a message flows
+## Chat flow and human escalation
 
 ```
-widget -> POST /api/chat (gateway: validate, rate limit, load tenant, check origin)
-       -> POST /v1/chat   (internal Python chat service, src/chat/server.py)
-            -> RAGRetriever.retrieve()  ($vectorSearch pre-filtered by tenant_id, optional reranker)
-            -> Ollama (llama.cpp GGUF) with the tenant's agent_config, streamed
-       <- NDJSON events (sources, token, done / error) -> SSE to the visitor: token, done / error only
+widget -> POST /api/chat    validate, rate limit, load tenant, check origin
+       -> POST /v1/chat     internal Python chat service: $vectorSearch filtered by tenant_id, Ollama
+       <- NDJSON events     gateway forwards token / done / error to the visitor as SSE
 ```
 
-The gateway talks to the Python service over HTTP so the embedding model and reranker load once instead of per request, reusing the existing `RAGRetriever` and Ollama client. The Python service buffers the model's complete schema-constrained JSON response, validates its schema, and applies a narrow safeguard against unsupported live-transfer or notification promises before emitting the safe `answer` as a `token` event. This delays visible text until generation and validation finish; it prevents those detected promises from reaching the visitor first. It is not a general factuality guarantee. Content-free internal progress events preserve cancellation during generation; the gateway's SSE heartbeats keep the visitor connection alive without exposing that internal progress.
+The visitor never receives document sources, scores, chunk text, the raw action or confidence. When
+the model answers with `action: "escalate"`, the gateway saves the conversation as one ticket per
+tenant and session in `ticket_logs` (`status: pending_review`, reason `not_in_docs` or
+`docs_require_human`, up to the last 40 messages, source ids and scores only). A repeated escalation
+updates the same ticket and keeps admin notes. Ordinary answered conversations are not stored.
 
-### What the visitor sees, and human escalation
-
-The visitor receives the reply and, after an escalation ticket has been successfully saved, optional `follow_up` metadata. Document sources, scores, chunk text, raw action, and confidence remain private. The `sources` event from the chat service stays server-side.
-
-When the model decides a question needs a person (`action: "escalate"`), the gateway saves the conversation as a ticket in `ticket_logs`, in the schema the dashboard's review queue already reads, so it shows up there with no dashboard changes:
-
-| Ticket field | Value |
-| :--- | :--- |
-| `status` | `pending_review` (a new escalation re-opens a resolved ticket) |
-| `escalation_reason` | `not_in_docs` when no relevant document was found, otherwise `docs_require_human` |
-| `messages[]` | the whole retained conversation (`customer` / `agent`, with timestamps), including turns answered normally (up to the last 40 messages) |
-| `retrieved_chunks`, `similarity_score`, `confidence`, `cited_sources` | for the reviewer only; chunks are `doc_id`, `section`, `score` and never include text |
-| `ticket_summary`, `channel` | a short digest; `widget` |
-
-There is one ticket per conversation, so a visitor who escalates twice updates the same ticket and keeps any admin notes and contact details. The ticket id is a hash of tenant and session; the visitor's raw session id is never stored. Ordinary answered conversations are not written to the database. The gateway forwards the safe answer when the Python service releases it; the final `done` waits for the acknowledged ticket save (bounded to five seconds). A failed save omits `follow_up` and appends a fixed visitor notice that the email follow-up form is temporarily unavailable; it never advertises a saved request. The optional contact form saves a visitor name/email to the existing ticket, for manual follow-up in the dashboard. No email is sent automatically.
-
-### Running it locally
-
-```bash
-# 1. Build the widget bundle (once, and after widget changes)
-cd widget && npm install && npm run build:embed
-
-# 2. Start the internal chat service (needs Atlas/local Mongo with a vector_index, and Ollama with the model)
-uv run python scripts/run_chat_service.py --port 8100
-
-# 3. Start the gateway
-#    (PORT, CHAT_BACKEND_URL, WIDGET_DEFAULT_ALLOWED_ORIGINS, ... are read from .env; see section 1B)
-cd gateway && npm run dev
-
-# 4. Serve any page that embeds the widget from an origin allowed for your tenant
-#    (see "Allowed origins" below; for local development set WIDGET_DEFAULT_ALLOWED_ORIGINS in .env)
-```
-
-### Allowed origins (per tenant)
-
-Each tenant's allowed storefront origins live on its `businesses` document at `widget_config.allowed_origins` (array of exact origins, e.g. `["https://shop.example.com"]`; no wildcards, paths or credentials). Set it with the authenticated admin API:
-
-```bash
-curl -X PUT http://localhost:4000/api/tenants/<tenant_id>/config \
-    -H "Content-Type: application/json" -b "capstone_session=<session cookie>" -H "Origin: http://localhost:3000" \
-    -d '{"widget_config": {"allowed_origins": ["https://shop.example.com"]}}'
-```
-
-A tenant with no `widget_config.allowed_origins` falls back to `WIDGET_DEFAULT_ALLOWED_ORIGINS`, which has **no built-in value**: when it is unset or empty, every browser origin is rejected with `403 origin_not_allowed`. A sample development value is in `.env.example`. A tenant's own list always takes precedence over the env fallback, and an explicitly empty array allows no browser origin even when the fallback is set. Requests with no `Origin` header (curl, server-side callers) are not subject to the list. The dashboard does not expose this field yet.
-
-### Environment variables
-
-| Variable | Default | Meaning |
-| :--- | :--- | :--- |
-| `CHAT_BACKEND_URL` | `http://127.0.0.1:8100` | Internal chat service. |
-| `CHAT_BACKEND_TOKEN` | *(empty)* | Shared secret sent as `X-Chat-Backend-Token`; set the same value on the chat service. Required whenever the service is reachable from another host. |
-| `WIDGET_DEFAULT_ALLOWED_ORIGINS` | *(unset: reject)* | Comma-separated origins for tenants without their own list. |
-| `WIDGET_DIST_PATH` | `widget/dist/widget.js` | Bundle served at `/widget.js`. |
-| `CHAT_RATE_LIMIT_PER_IP` / `CHAT_RATE_LIMIT_PER_SESSION` | `30` / `10` | Requests per window. |
-| `CHAT_RATE_LIMIT_WINDOW_MS` | `60000` | Sliding window. |
-| `CHAT_MAX_DURATION_MS` | `120000` | Hard cap on one reply; ends with a `timeout` error event. |
-| `CHAT_HEARTBEAT_MS` | `10000` | SSE `: ping` interval while a slow model reads the prompt. |
-| `CHAT_PRE_STREAM_WAIT_MS` | `3000` | How long to wait for the first token before committing to a `200` stream. A backend that fails inside this window (model server down, retrieval failed) gets a real `503`; a slower model just starts streaming. `0` commits immediately. |
-| `MONGODB_SERVER_SELECTION_TIMEOUT_MS` | `5000` | Read by the chat service (`scripts/run_chat_service.py`): how long retrieval waits for MongoDB before the request fails. |
-| `CHAT_HISTORY_MAX_MESSAGES` | `8` | In-memory turns kept per `(tenant, session)`. |
-| `TRUST_PROXY` | *(unset)* | Express `trust proxy` (for example `1`) so `req.ip` is the real client behind a reverse proxy. |
-
-### Notes and limits
-
-- Rate limits and conversation history are in memory and per process. Run a shared store before scaling to several gateway replicas.
-- `session_id` must be 16 to 128 characters of letters, digits, `_`, `-`, `.`, `:`. The widget's ids satisfy this; short ids are rejected because history is keyed by them.
-- Behind nginx or another proxy, disable buffering for `/api/chat` (the route sends `X-Accel-Buffering: no`) and do not compress it.
-- Tenant `agent_config.system_prompt` and `agent_tone` are appended after the base support prompt the model was trained on. That combination has not been evaluated on the held-out benchmark.
+The final `done` waits up to five seconds for the acknowledged ticket save. If it fails, no
+`follow_up` is offered and a fixed notice tells the visitor the form is unavailable.
 
 ### Asynchronous follow-up contract
 
-SSE `done` and the JSON fallback can include `follow_up: { available: true, token, contact_email?, contact_phone? }` only after an escalation ticket is persisted. Contact values come exclusively from the tenant's public `contact_email`/optional `contact_phone`, never an administrator account. The gateway also passes trusted `business_contact: { email, phone }` to `/v1/chat`.
+After a saved escalation, `done` (or the JSON body) can include
+`follow_up: { available: true, token, contact_email?, contact_phone? }`. Contact values come only
+from the tenant's public `contact_email` and optional `contact_phone`, never an admin account.
 
-`POST /api/chat/contact` accepts `{ tenant_id, session_id, follow_up_token, name, email }`. It applies the same tenant/origin allowlist and IP/session limits as chat, validates a nonempty name (100 characters maximum) and email (254 maximum), and updates only the saved ticket authenticated by the capability. Response `200 { "status": "saved" }` means the database acknowledged persistence, not that an email was sent. Invalid inputs return 400, invalid/expired capabilities or disallowed origins 403, unknown tenants 404, conflicting submissions 409, rate limits 429, and persistence failures 503. The first contact submission wins; an identical retry succeeds without rewriting the transcript, contact, or admin notes.
+`POST /api/chat/contact` takes `{ tenant_id, session_id, follow_up_token, name, email }`
+(name up to 100 characters, email up to 254), applies the same origin allowlist and limits as chat,
+and updates only the ticket the token is bound to.
 
-Capabilities are opaque AES-GCM authenticated tokens bound to tenant, session, and ticket; they expire after 24 hours. Configure a strong random `CHAT_FOLLOW_UP_SECRET` identically across gateway replicas to preserve forms across restarts. Without it the gateway generates an in-memory random key, so forms expire on restart and cannot be shared across replicas. Never send that secret to visitors. Contact persistence and ticket saves have five-second bounds.
+| Status | Meaning |
+| :--- | :--- |
+| `200 { "status": "saved" }` | The database acknowledged the write. No email is sent; staff follow up from the dashboard. |
+| `400` | Invalid input. |
+| `403` | Disallowed origin, or invalid or expired token. |
+| `404` | Unknown tenant. |
+| `409` | Different contact details were already submitted. An identical retry succeeds. |
+| `429` | Rate limited. |
+| `503` | Save failed or timed out. |
 
-Authenticated tenant config GET/PUT responses include `assistant_policy: { version, system_prompt }`, loaded from the shared repository policy. Writing this field is rejected. `agent_config.system_prompt` remains editable tenant business instructions. Optional `contact_phone` requires a valid international number with an explicit country calling code (no default country is guessed). The gateway checks numbering-plan validity using `libphonenumber-js/max`, accepts an optional trailing x/X/# extension of 1–10 digits and at most 50 input characters, and stores E.164 plus ` x<extension>` when supplied. It may be cleared with an empty string. Public follow-up, tenant-profile, and signup emails use `validator` syntax checks with a 254-character maximum; surrounding whitespace is trimmed. These checks validate format and numbering plans, not ownership or actual email/phone reachability.
+Tokens are AES-GCM authenticated, bound to tenant, session and ticket, and expire after 24 hours.
+Without `CHAT_FOLLOW_UP_SECRET` the key is random per process, so forms expire on restart and do not
+work across replicas.
+
+Other behavior: `session_id` must be 16 to 128 characters of letters, digits, `_`, `-`, `.`, `:`.
+Optional `contact_phone` must be a valid international number with a country code; emails use
+`validator` syntax checks. These validate format, not reachability. Tenant `system_prompt` and
+`agent_tone` are appended after the base support prompt; that combination has not been evaluated on
+the held-out benchmark. Behind nginx or another proxy, disable buffering and compression for
+`/api/chat` (the route sends `X-Accel-Buffering: no`).
+
+## Running
+
+```bash
+# Gateway (reads the repo-root .env; copy .env.example first)
+cd gateway
+npm install
+npm run dev        # or: npm start
+
+# Dashboard
+cd dashboard && npm run dev      # http://localhost:3000
+
+# Widget bundle (needed for /widget.js; once, and after widget changes)
+cd widget && npm install && npm run build:embed
+
+# Internal chat service (needs a vector index and Ollama with the model)
+uv run python scripts/run_chat_service.py --port 8100
+```
+
+For `standard` mode open `http://localhost:3000/signup` or `/login`. For `preset_training`, set
+`APP_MODE=preset_training` and `MONGODB_TRAINING_DB_NAME=<dev database>` in `.env`; the login page
+then shows one-click demo buttons for the preset tenants.
+
+Docker: the full containerised stack is documented in [deployment/README.md](../deployment/README.md),
+and the isolated client-training sandbox in
+[examples/client-training/README.md](../examples/client-training/README.md). This README does not
+repeat them.
+
+## Tests
+
+```bash
+cd gateway
+npm test      # node --test tests/*.test.js
+```
+
+The suite runs against an in-memory MongoDB fake, a mocked ingestion runner, a scripted chat backend
+and a stub HTTP chat service, so it needs no database, model, network or credentials. The Python
+chat service has its own offline tests: `uv run python -m unittest tests.test_chat_service` from the
+repository root.
+
+## Security notes
+
+- **Tenant isolation**: the tenant comes from the server-side session. Any tenant id in the path,
+  body, query or `X-Tenant-Id` is only compared against it; conflicting values are refused. Ticket,
+  document and chunk queries are always filtered by that tenant. Public chat loads the tenant by id,
+  rejects tenants of the wrong mode, and the retriever pre-filters `$vectorSearch` by `tenant_id`.
+- **Sessions**: random 256-bit tokens in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over HTTPS or
+  in production). Only a SHA-256 hash is stored, sessions expire after 12 hours, are checked against
+  the database on every request and can be revoked.
+- **Login**: constant-time comparison even for unknown emails, one error message for all failures,
+  and throttling on failed attempts.
+- **Rate limiting**: in-memory sliding windows with a bounded key count, per process. Use a shared
+  store before running several replicas, and set `TRUST_PROXY` behind a proxy.
+- **No secrets to the browser**: the widget and dashboard never see `MONGODB_URI`, the backend
+  token, the follow-up secret or retrieval details. The widget talks only to `/api/chat`; error
+  bodies and `/api/health` contain no driver errors, hostnames or connection strings.
+- **Uploads**: allowlisted extensions, 10 MB cap, sanitized names, staged files always deleted,
+  tenant and document ids validated against strict patterns before use in paths or queries.

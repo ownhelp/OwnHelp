@@ -1,3 +1,5 @@
+// Protects the sidebar's vector-index status display and health polling cadence, including older
+// gateways that only send a boolean.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

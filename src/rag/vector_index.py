@@ -7,6 +7,13 @@ the index is shared by every tenant and filtered by ``tenant_id`` at query time.
 Creating an index only *submits* it. Atlas builds it asynchronously, so nothing here waits for the
 build; callers read ``get_vector_index_status`` to see ``building`` become ``ready``.
 
+Index shape: a 384-dimension (for the default BGE-small / MiniLM models) ``cosine`` vector field on
+``embedding``, plus ``tenant_id`` and ``doc_id`` as filter fields. ``tenant_id`` must be a filter
+field because ``$vectorSearch`` can only pre-filter on indexed filter paths; without it tenant
+isolation in ``src/rag/retriever.py`` would fail. Cosine matches how the BGE models were trained.
+Callers: ``RAGDocumentIngestor.ensure_vector_search_index``, setup scripts and the dashboard's
+index-status endpoint.
+
 States returned by ``get_vector_index_status`` / ``ensure_vector_index``:
     missing        no index with that name exists
     building       the index exists but is not yet queryable
@@ -51,12 +58,14 @@ def build_vector_index_definition(num_dimensions: int) -> Dict[str, Any]:
 
 
 def is_permission_error(exc: BaseException) -> bool:
+    """True when a pymongo failure is an authorization problem (by code or message text)."""
     if not isinstance(exc, OperationFailure):
         return False
     return exc.code in _PERMISSION_CODES or bool(_PERMISSION_PATTERN.search(str(exc)))
 
 
 def permission_message(collection_name: str, index_name: str) -> str:
+    """Operator-facing explanation of which Atlas privileges are missing."""
     return (
         f"The database user is not permitted to create collections or to inspect/create Atlas Search "
         f"indexes, so the vector index '{index_name}' on collection '{collection_name}' could not be set up. "
@@ -75,7 +84,12 @@ def _indexed_dimensions(index: Dict[str, Any]) -> Optional[int]:
 
 
 def classify_index(index: Dict[str, Any], expected_dimensions: Optional[int] = None) -> Tuple[str, Optional[str]]:
-    """Maps one ``listSearchIndexes`` entry to (state, message)."""
+    """Maps one ``listSearchIndexes`` entry to (state, message).
+
+    "ready" means queryable: until then $vectorSearch returns nothing, which would look like an
+    empty knowledge base. The dimension check runs first because a mismatched index is unusable
+    even when it reports READY.
+    """
     status = str(index.get("status") or index.get("state") or "").upper()
     if status == "DOES_NOT_EXIST":
         return "missing", None

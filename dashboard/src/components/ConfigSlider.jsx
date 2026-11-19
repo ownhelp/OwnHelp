@@ -1,7 +1,14 @@
 "use client";
 
+/** Labelled range slider card used for the numeric runtime settings on the profile page. */
+
 import React from "react";
 
+/**
+ * Props: id, label, description (text); value, min, max, step (numbers); onChange (receives a
+ * Number); formatValue (optional display formatter), unit (suffix when no formatter);
+ * minLabel and maxLabel (optional captions under the ends of the track).
+ */
 export default function ConfigSlider({
     id,
     label,

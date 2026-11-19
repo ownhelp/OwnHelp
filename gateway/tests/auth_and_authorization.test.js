@@ -1,3 +1,4 @@
+// Protects: app-mode isolation, session validity and tenant authorization, so no session can read or change another tenant's data.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
@@ -399,8 +400,8 @@ class InMemoryDatabase {
 
 function extractSessionCookie(response) {
     const setCookie = response.headers.get("set-cookie") || "";
-    const match = setCookie.match(/capstone_session=([^;]+)/);
-    return match ? `capstone_session=${match[1]}` : "";
+    const match = setCookie.match(/ownhelp_session=([^;]+)/);
+    return match ? `ownhelp_session=${match[1]}` : "";
 }
 
 async function startTestServer(app) {
@@ -705,18 +706,18 @@ describe("Sprint 4 Slice 4: Authentication, Mode Isolation & Tenant Authorizatio
 
         const invalidCookies = [
             { label: "no session", header: "" },
-            { label: "malformed session", header: "capstone_session=not-hex" },
+            { label: "malformed session", header: "ownhelp_session=not-hex" },
             {
                 label: "forged unknown session",
-                header: `capstone_session=${"f".repeat(64)}`,
+                header: `ownhelp_session=${"f".repeat(64)}`,
             },
             {
                 label: "expired session",
-                header: `capstone_session=${expiredRaw}`,
+                header: `ownhelp_session=${expiredRaw}`,
             },
             {
                 label: "revoked session",
-                header: `capstone_session=${revokedRaw}`,
+                header: `ownhelp_session=${revokedRaw}`,
             },
         ];
 
@@ -1277,7 +1278,7 @@ describe("Sprint 4 Slice 4: Authentication, Mode Isolation & Tenant Authorizatio
 
         await connectToDatabase(process.env);
 
-        // 7A. Demo login issues custom cookie name capstone_demo_session (does not collide with capstone_session)
+        // 7A. Demo login issues custom cookie name capstone_demo_session (does not collide with ownhelp_session)
         const demoRes = await fetch(`${baseUrl}/api/auth/demo-login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1290,10 +1291,10 @@ describe("Sprint 4 Slice 4: Authentication, Mode Isolation & Tenant Authorizatio
             `Expected capstone_demo_session cookie, got ${setCookieHeader}`
         );
 
-        // Standard capstone_session cookie is ignored when SESSION_COOKIE_NAME=capstone_demo_session
+        // Standard ownhelp_session cookie is ignored when SESSION_COOKIE_NAME=capstone_demo_session
         const rawCookieValue = setCookieHeader.split(";")[0].split("=")[1];
         const wrongCookieNameRes = await fetch(`${baseUrl}/api/auth/session`, {
-            headers: { Cookie: `capstone_session=${rawCookieValue}` },
+            headers: { Cookie: `ownhelp_session=${rawCookieValue}` },
         });
         assert.equal(wrongCookieNameRes.status, 401);
 

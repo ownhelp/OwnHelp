@@ -1,3 +1,16 @@
+/**
+ * Preset (synthetic) tenants, sample tickets and tenant/document id rules.
+ *
+ * Why: the five mock businesses and their sample tickets live in one shared fixture manifest
+ * (data/fixtures/demo_manifest.json) so the gateway, the Python tooling and the Docker demo agree.
+ * The id validators and the default system prompt builder are shared by signup, tenant and document
+ * routes so every tenant, preset or real, follows the same schema (no per-company special cases).
+ *
+ * Input: the manifest, read once at require time (a missing or malformed file fails startup).
+ * Output: PRESET_TENANTS, SAMPLE_TICKETS and helpers.
+ * Callers: db/mongo.js (seeding in preset_training mode), routes/auth.js, tenants.js,
+ * documents.js, middleware/auth.js.
+ */
 const fs = require("fs");
 const path = require("path");
 
@@ -64,7 +77,10 @@ function getPresetTenantById(tenantId) {
     );
 }
 
-const TENANT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{1,62}$/;
+// Tenant and document ids end up in Mongo filters, file paths and URLs. These allowlist patterns
+// (plus the explicit ".." / separator / "$" rejections) keep path traversal and operator injection
+// ("$ne" style keys) out of every route that accepts an id.
+const TENANT_ID_PATTERN =/^[a-z0-9][a-z0-9_-]{1,62}$/;
 const DOC_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,120}$/;
 
 function isValidTenantId(tenantId) {

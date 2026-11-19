@@ -1,4 +1,4 @@
-"""Offline policy wiring checks; model compliance is measured separately."""
+"""Protects the shared support policy: tenant text can only extend it, and the unsupported-handoff safeguard matches only affirmative promises (offline; model compliance is measured separately)."""
 
 import json
 import unittest

@@ -1,4 +1,20 @@
-"""Deterministic, safe local demo seeder and vector index initializer."""
+"""Deterministic, safe local demo seeder and vector index initializer.
+
+Purpose: populate an isolated local MongoDB (the ``mongodb-atlas-local`` container) with the preset
+demo tenants, their sample tickets and embedded document chunks so the dashboard and gateway can be
+tried without Atlas or a paid service.
+Inputs: ``data/fixtures/demo_manifest.json`` (tenants, source documents, sample tickets, embedding
+model) plus APP_MODE, MONGODB_URI and MONGODB_TRAINING_DB_NAME from the environment.
+Outputs: ``businesses``, ``ticket_logs``, admin-collection indexes, ``doc_vectors`` chunks (via
+``RAGDocumentIngestor``), a vector search index and a ``demo_seed_state`` record of source hashes.
+Callers: ``examples/client-training/scripts/seed.py`` (the runner) and ``tests/test_demo_setup.py``.
+
+Safety design: ``validate_demo_environment_and_target`` refuses anything that is not a local
+``mongodb://`` host with an allow-listed demo database name, so the seeder can never write to Atlas,
+``rag_knowledge_base`` or ``capstone_dev``. Seeding is idempotent: source hashes stored in
+``demo_seed_state`` detect fixture drift, which needs ``refresh_changed`` to overwrite, and
+administrator edits to a seeded business are not clobbered.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +29,8 @@ from urllib.parse import urlsplit
 
 from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
+
+from src.rag.vector_index import build_vector_index_definition
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST_PATH = PROJECT_ROOT / "data" / "fixtures" / "demo_manifest.json"
@@ -49,6 +67,7 @@ class DemoReadinessTimeoutError(DemoSeedError):
 
 
 def compute_file_sha256(file_path: Path) -> str:
+    """SHA-256 of a file's bytes, used to detect source-document drift between seeds."""
     digest = hashlib.sha256()
     with Path(file_path).open("rb") as handle:
         for block in iter(lambda: handle.read(65536), b""):
@@ -57,6 +76,7 @@ def compute_file_sha256(file_path: Path) -> str:
 
 
 def compute_json_sha256(payload: Any) -> str:
+    """Order-independent SHA-256 of a JSON value (sorted keys, compact separators)."""
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -79,6 +99,11 @@ def load_demo_manifest(
     manifest_path: Optional[Path | str] = None,
     project_root: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
+    """Reads and validates the fixture manifest and hashes every referenced tenant, ticket and document.
+
+    Rejects duplicate ids, missing files and any path touching the held-out benchmark or evaluation
+    data, so benchmark material can never be seeded into a retrievable collection.
+    """
     root = Path(project_root) if project_root else PROJECT_ROOT
     resolved_path = Path(manifest_path) if manifest_path else (root / "data" / "fixtures" / "demo_manifest.json")
     if not resolved_path.is_file():
@@ -314,6 +339,7 @@ def plan_demo_seed(
 
 
 def _strip_business_for_comparison(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Keeps only manifest-controlled fields so runtime fields (_id, updated_at) do not affect the hash."""
     return {
         "tenant_id": doc.get("tenant_id"),
         "name": doc.get("name"),
@@ -325,6 +351,7 @@ def _strip_business_for_comparison(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _strip_ticket_for_comparison(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Keeps only seeded ticket fields, comparable against the manifest's ticket hash."""
     keys = (
         "ticket_id",
         "tenant_id",
@@ -351,29 +378,16 @@ def ensure_local_vector_search_index(
     index_name: str,
     num_dimensions: int,
 ) -> Dict[str, Any]:
-    """Ensure the collection and vectorSearch index with tenant_id and doc_id filters exist."""
+    """Ensure the collection and vectorSearch index with tenant_id and doc_id filters exist.
+
+    The definition comes from ``src/rag/vector_index.build_vector_index_definition`` (cosine, filters
+    on tenant_id and doc_id) so the seeder and the ingestion path can never drift apart.
+    """
     db = collection.database
     if collection.name not in db.list_collection_names():
         db.create_collection(collection.name)
 
-    definition = {
-        "fields": [
-            {
-                "type": "vector",
-                "path": "embedding",
-                "numDimensions": int(num_dimensions),
-                "similarity": "cosine",
-            },
-            {
-                "type": "filter",
-                "path": "tenant_id",
-            },
-            {
-                "type": "filter",
-                "path": "doc_id",
-            },
-        ]
-    }
+    definition = build_vector_index_definition(int(num_dimensions))
 
     try:
         existing_indexes = list(collection.list_search_indexes())
@@ -462,13 +476,19 @@ def verify_vector_search_smoke_query(
     *,
     index_name: str,
     query_vector: List[float],
+    # The default tenant is only a smoke-test convenience for the bundled demo fixture; callers
+    # should pass the tenant they actually seeded.
     tenant_id: str = "iron_and_oak",
     timeout_seconds: float = 60.0,
     poll_interval_seconds: float = 2.0,
     sleep_fn: Callable[[float], None] = time.sleep,
     clock_fn: Callable[[], float] = time.monotonic,
 ) -> Dict[str, Any]:
-    """Execute a real tenant-prefiltered $vectorSearch query and confirm non-empty tenant-scoped results."""
+    """Execute a real tenant-prefiltered $vectorSearch query and confirm non-empty tenant-scoped results.
+
+    An index can report READY slightly before it returns documents, so this retries until results
+    appear or the timeout passes. Any foreign tenant in the results is a hard failure.
+    """
     pipeline = [
         {
             "$vectorSearch": {
@@ -822,6 +842,10 @@ def execute_demo_seed(
                     }
                 )
 
+            # TODO(seeder-replace): delete-then-insert is not safe against a failed insert (it
+            # leaves these documents empty). Use RAGDocumentIngestor.replace_chunks (insert first,
+            # then delete the old ids) with scope {"tenant_id": tid, "doc_id": {"$in": ...}}.
+            # Low priority: this only runs against disposable demo databases.
             vectors_col.delete_many(
                 {"tenant_id": tid, "doc_id": {"$in": sorted(expected_doc_ids)}}
             )

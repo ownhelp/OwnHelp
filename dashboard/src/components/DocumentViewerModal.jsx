@@ -1,8 +1,11 @@
 "use client";
 
+/** Modal that fetches and shows the raw content of one document, with copy and replace actions. */
+
 import React, { useState, useEffect } from "react";
 import { fetchTenantDocumentDetail } from "@/lib/api";
 
+/** Props: tenantId, docId (what to load); onClose; onRequestReupload (replace this document). */
 export default function DocumentViewerModal({
     tenantId,
     docId,

@@ -1,4 +1,29 @@
-"""CLI runner for single-document RAG ingestion into MongoDB Atlas doc_vectors."""
+"""CLI runner for single-document RAG ingestion into MongoDB Atlas doc_vectors.
+
+Usage:
+    python scripts/ingest_uploaded_document.py --file PATH --tenant TENANT_ID
+        [--doc-id ID] [--overwrite true|false] [--db-name DB]
+
+Arguments:
+    --file       .md or .json document to ingest (required).
+    --tenant     Target tenant_id (required).
+    --doc-id     doc_id for the chunks (default: the file name without extension).
+    --overwrite  Replace existing chunks for this tenant and doc_id (default true). With false,
+                 an existing document is an error (exit code 2, code DOCUMENT_EXISTS).
+    --db-name    Database to write to (default: MONGODB_DB_NAME, else rag_knowledge_base).
+
+Environment (process environment first, then .env in the project root):
+    MONGODB_URI (required), MONGODB_DB_NAME, MONGODB_COLLECTION_NAME (default doc_vectors),
+    EMBEDDING_MODEL_NAME (default BAAI/bge-small-en-v1.5).
+
+Output: stdout carries optional progress lines {"event": "stage", "stage": "parsing|embedding|writing"}
+(one per stage, as it begins) followed by ONE final JSON object (status success or error with a
+code) as the last line; warnings go to stderr. Exit codes: 0 success, 1 validation or ingestion error, 2 document exists.
+
+Side effects: loads the embedding model, creates the collection and vector index if missing, and
+inserts chunks (deleting the previous chunks of the same doc_id when overwriting). The Orchestration
+Gateway invokes this script for dashboard uploads.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +34,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 from dotenv import load_dotenv
 
@@ -65,7 +91,9 @@ def parse_bool(value: str | bool) -> bool:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Parse, embed (BAAI/bge-small-en-v1.5), and ingest a single document into MongoDB Atlas doc_vectors."
+        description="Parse, embed (BAAI/bge-small-en-v1.5), and ingest a single document into MongoDB Atlas doc_vectors.",
+        epilog="Env: MONGODB_URI (required), MONGODB_DB_NAME, MONGODB_COLLECTION_NAME, EMBEDDING_MODEL_NAME. "
+        "Prints one JSON result on stdout. Exit codes: 0 ok, 1 error, 2 document exists.",
     )
     parser.add_argument(
         "--file",
@@ -105,6 +133,7 @@ def ingest_single_document(
     doc_id_override: str | None = None,
     db_name_override: str | None = None,
     mongo_uri_override: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> dict:
     caller_db_name = (db_name_override or os.environ.get("MONGODB_DB_NAME") or "").strip()
     caller_mongo_uri = (mongo_uri_override or os.environ.get("MONGODB_URI") or "").strip()
@@ -163,6 +192,8 @@ def ingest_single_document(
                 f"Document '{doc_id}' already exists for tenant '{tenant_id}'. Enable overwrite to replace it."
             )
 
+        if progress_callback:
+            progress_callback("parsing")
         raw_chunks = ingestor._parse_file(file_path)
         for chunk in raw_chunks:
             chunk["doc_id"] = doc_id
@@ -172,6 +203,8 @@ def ingest_single_document(
                 f"Document '{doc_id}' produced 0 chunks. Ensure the file is not empty."
             )
 
+        if progress_callback:
+            progress_callback("embedding")
         texts = [c["text"] for c in raw_chunks]
         embeddings = ingestor.model.encode(
             texts,
@@ -196,12 +229,11 @@ def ingest_single_document(
                 }
             )
 
-        if existing_count > 0:
-            ingestor.collection.delete_many(
-                {"tenant_id": tenant_id, "doc_id": doc_id}
-            )
-
-        ingestor.collection.insert_many(documents)
+        if progress_callback:
+            progress_callback("writing")
+        # Insert the new chunks before removing the old ones (see replace_chunks), so a failed
+        # insert never leaves this document, or the tenant, without vectors.
+        ingestor.replace_chunks({"tenant_id": tenant_id, "doc_id": doc_id}, documents)
         ingestor.client.close()
 
     return {
@@ -212,6 +244,22 @@ def ingest_single_document(
         "chunks_created": len(documents),
         "vector_index": vector_index,
     }
+
+
+def make_stage_emitter(stream=None) -> Callable[[str], None]:
+    """Returns a callback that writes one ``{"event": "stage", "stage": ...}`` JSON line per stage.
+
+    The lines go to the real stdout (captured here, because ingestion redirects sys.stdout to
+    stderr). They carry no ``status`` key and always precede the final summary, which stays the
+    LAST stdout line, so a consumer that reads only the last line is unaffected.
+    """
+    target = stream if stream is not None else sys.stdout
+
+    def emit(stage: str) -> None:
+        target.write(json.dumps({"event": "stage", "stage": stage}) + "\n")
+        target.flush()
+
+    return emit
 
 
 def main() -> None:
@@ -225,6 +273,7 @@ def main() -> None:
             overwrite=args.overwrite,
             doc_id_override=args.doc_id,
             db_name_override=args.db_name,
+            progress_callback=make_stage_emitter(),
         )
         print(json.dumps(result))
     except FileExistsError as exc:

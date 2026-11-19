@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Login route ("/login"). Standard mode shows an email/password form; preset_training mode (when
+ * the gateway enables demo login) shows one-click buttons for the preset tenants instead.
+ * AppShell redirects already-authenticated visitors away from this page.
+ */
+
 import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";

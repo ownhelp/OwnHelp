@@ -1,3 +1,19 @@
+/**
+ * Document management routes (mounted under /api, behind requireAuth).
+ *
+ * Purpose: let an administrator upload a Markdown/JSON document, list documents and inspect the
+ * stored text and vector chunks for their own tenant. Embedding and chunking are Python work, so
+ * uploads are staged on disk and handed to scripts/ingest_uploaded_document.py; this keeps the
+ * embedding model out of the Node process and reuses the one ingestion implementation.
+ *
+ * Security: every route resolves its tenant through authorizeTenantAccess, so a tenant id in the
+ * URL, query or form can never widen access. Uploaded file names are sanitized and prefixed, only
+ * .md/.json up to 10 MB are accepted, and the staged file is always deleted afterwards.
+ *
+ * Env: UPLOAD_STAGING_DIR (staging directory), PYTHON_EXECUTABLE (interpreter override).
+ * Callers: the dashboard's document manager and chunk viewer. Tests swap the Python runner with
+ * setIngestionRunner() so they never spawn a process.
+ */
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -125,12 +141,17 @@ function inferFormat(docId, explicitFormat, sampleText, tenantId) {
     return "md";
 }
 
+// Runs the ingestion script and trusts only its last stdout line (a JSON summary) so library
+// noise printed earlier cannot be mistaken for the result. Interpreter order: PYTHON_EXECUTABLE,
+// then <repo>/.venv/bin/python, then `uv run`. The target database is passed explicitly so the
+// worker writes to the gateway's active database (never its own default).
 function defaultPythonIngestionRunner({
     filePath,
     tenantId,
     overwrite,
     docId,
     dbName,
+    onStage,
 }) {
     return new Promise((resolve, reject) => {
         const pythonExecutable = (process.env.PYTHON_EXECUTABLE || "").trim();
@@ -176,8 +197,24 @@ function defaultPythonIngestionRunner({
         let stdout = "";
         let stderr = "";
 
+        // Stage lines ({"event":"stage",...}) are reported as they arrive; they stay in `stdout`
+        // harmlessly because only the LAST line is ever read as the final summary.
+        let pendingLine = "";
         child.stdout.on("data", (chunk) => {
-            stdout += chunk.toString();
+            const text = chunk.toString();
+            stdout += text;
+            if (typeof onStage !== "function") return;
+            pendingLine += text;
+            const parts = pendingLine.split("\n");
+            pendingLine = parts.pop();
+            for (const part of parts) {
+                try {
+                    const event = JSON.parse(part);
+                    if (event && event.event === "stage") onStage(event.stage);
+                } catch {
+                    // Not a JSON line (library noise): ignore.
+                }
+            }
         });
 
         child.stderr.on("data", (chunk) => {
@@ -224,6 +261,28 @@ function defaultPythonIngestionRunner({
     });
 }
 
+const NDJSON_STAGES = new Set(["parsing", "embedding", "writing"]);
+
+function wantsNdjson(req) {
+    return String(req.get("accept") || "")
+        .toLowerCase()
+        .includes("application/x-ndjson");
+}
+
+// Streamed errors must never leak stack traces, staging paths or raw process stderr. Only errors
+// the worker classified itself (they carry a `code`) keep their message; anything else is generic.
+function safeStreamErrorMessage(error, tempFilePath) {
+    if (!error || !error.code) {
+        return "Failed to ingest uploaded document.";
+    }
+    let message = String(error.message || "Failed to ingest uploaded document.");
+    if (tempFilePath) {
+        message = message.split(tempFilePath).join("the uploaded file");
+    }
+    message = message.replace(/\/[^\s'"]*\/[^\s'"]*/g, "[path]");
+    return message.split(/\r?\n/)[0].slice(0, 300);
+}
+
 let activeIngestionRunner = defaultPythonIngestionRunner;
 
 function setIngestionRunner(runner) {
@@ -236,6 +295,11 @@ function resetIngestionRunner() {
 
 /**
  * POST /api/documents/upload
+ * Auth: session cookie; multipart field `file` (.md/.json) plus optional `doc_id`, `overwrite`.
+ * Response 200 ingestion summary from the worker; 400 bad file/doc_id/worker error; 409
+ * DOCUMENT_EXISTS when overwrite is false.
+ * With `Accept: application/x-ndjson` the 200 body is a stream of JSON lines instead: stage events
+ * (uploading, parsing, embedding, writing) then one `done` (the summary) or `error` event.
  * Authenticates session and pre-validates any query/header tenant selector BEFORE multipart parsing.
  * After multipart parsing, verifies any body tenant_id against the session tenant, cleans up temp files
  * on rejection, and passes the session-authorized tenantId and active database name to the worker.
@@ -290,13 +354,55 @@ router.post("/documents/upload", (req, res) => {
             }
 
             const activeDbName = getActiveDatabaseName(process.env);
-            const summary = await activeIngestionRunner({
+            const runnerParams = {
                 filePath: tempFilePath,
                 tenantId: authorizedTenantId,
                 overwrite,
                 docId: targetDocId,
                 dbName: activeDbName,
-            });
+            };
+
+            if (wantsNdjson(req)) {
+                // Everything that can fail with a plain 4xx has been validated above, so from
+                // here on the status line is committed to 200 and failures travel as events.
+                res.status(200);
+                res.set({
+                    "Content-Type": "application/x-ndjson; charset=utf-8",
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                });
+                if (typeof res.flushHeaders === "function") res.flushHeaders();
+                const send = (payload) => {
+                    if (!res.writableEnded && !res.destroyed) {
+                        res.write(`${JSON.stringify(payload)}\n`);
+                    }
+                };
+                send({ event: "stage", stage: "uploading" });
+                try {
+                    const summary = await activeIngestionRunner({
+                        ...runnerParams,
+                        onStage: (stage) => {
+                            if (NDJSON_STAGES.has(stage)) {
+                                send({ event: "stage", stage });
+                            }
+                        },
+                    });
+                    send({ event: "done", ...summary });
+                } catch (error) {
+                    console.error(
+                        "[POST /api/documents/upload] Error:",
+                        error.message
+                    );
+                    send({
+                        event: "error",
+                        error: error.code || "INGESTION_ERROR",
+                        message: safeStreamErrorMessage(error, tempFilePath),
+                    });
+                }
+                return res.end();
+            }
+
+            const summary = await activeIngestionRunner(runnerParams);
 
             return res.status(200).json(summary);
         } catch (error) {
@@ -320,6 +426,8 @@ router.post("/documents/upload", (req, res) => {
 
 /**
  * GET /api/tenants/:tenantId/documents
+ * Auth: session cookie, tenant must match the session. Response 200 document list with chunk
+ * counts; 403 tenant mismatch; 500 on database failure.
  * Queries doc_vectors grouped by doc_id for the session-authorized tenant.
  */
 router.get("/tenants/:tenantId/documents", async (req, res) => {
@@ -385,6 +493,8 @@ router.get("/tenants/:tenantId/documents", async (req, res) => {
 
 /**
  * GET /api/tenants/:tenantId/documents/:docId
+ * Auth: session cookie, tenant must match the session. Response 200 text + chunks; 400 bad
+ * docId; 404 unknown document; 403 tenant mismatch.
  * Returns raw document text and ordered chunks for DocumentViewerModal.
  */
 router.get("/tenants/:tenantId/documents/:docId", async (req, res) => {
@@ -481,7 +591,17 @@ router.get("/tenants/:tenantId/documents/:docId", async (req, res) => {
 
 /**
  * GET /api/tenants/:tenantId/chunks
+ * Auth: session cookie, tenant must match the session. Query: doc_id, page, limit.
+ * Response 200 { chunks, total, page, limit, total_pages }. The embedding vector is projected out
+ * (large, useless to the UI); limit is capped server side.
  * Returns paginated chunks for the session-authorized tenant.
+ *
+ * TODO(chunk-editing): this is the only chunk route and it is read-only. Manual chunk editing
+ * needs PUT (edit text, re-embed) and DELETE routes under the same tenant check, a way to run the
+ * embedding model from the gateway (today only the Python side embeds, so this likely calls the
+ * chat service or a script), tests like the upload ones, and a doc_vectors write that follows the
+ * replace_chunks pattern so a failure never loses the chunk. Never add fields to the doc_vectors
+ * schema.
  */
 router.get("/tenants/:tenantId/chunks", async (req, res) => {
     try {

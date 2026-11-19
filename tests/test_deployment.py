@@ -1,4 +1,4 @@
-"""Offline deployment contracts; no Docker daemon, real database, or model calls."""
+"""Protects the deployment contracts (private env file creation, checksum verification, Compose file validity); no Docker daemon, real database, or model calls."""
 
 import hashlib
 import json
@@ -7,14 +7,16 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
 from dotenv import dotenv_values
 
-from src.deployment.config import GGUF_FILENAME, configure_stack
+from src.deployment.config import GGUF_FILENAME, configure_stack, obtain_mongodb_uri, validate_mongodb_uri
 
 ROOT = Path(__file__).resolve().parents[1]
+FAKE_URI = "mongodb+srv://test_user:test_pass@cluster.example.invalid/"
 
 
 class DeploymentTests(unittest.TestCase):
@@ -28,39 +30,82 @@ class DeploymentTests(unittest.TestCase):
         self.output = self.directory / "private.env"
 
     def test_configuration_is_private_and_existing_secrets_are_preserved(self):
-        configure_stack(self.directory, self.sha, self.output)
+        configure_stack(self.directory, self.sha, self.output, FAKE_URI)
         self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o600)
         values = dotenv_values(self.output)
         self.assertEqual(values["MODEL_GGUF_DIR"], str(self.directory))
         self.assertEqual(values["MODEL_GGUF_SHA256"], self.sha)
-        secrets = [values[key] for key in ("MONGO_ROOT_PASSWORD", "CHAT_BACKEND_TOKEN", "CHAT_FOLLOW_UP_SECRET")]
-        self.assertEqual(len(set(secrets)), 3)
+        self.assertEqual(values["MONGODB_URI"], FAKE_URI)
+        self.assertEqual(values["SESSION_COOKIE_NAME"], "ownhelp_session")
+        self.assertNotIn("MONGO_ROOT_PASSWORD", values)
+        secrets = [values[key] for key in ("CHAT_BACKEND_TOKEN", "CHAT_FOLLOW_UP_SECRET")]
+        self.assertEqual(len(set(secrets)), 2)
         self.assertTrue(all(len(value) == 64 for value in secrets))
         before = self.output.read_bytes()
         with self.assertRaises(FileExistsError):
-            configure_stack(self.directory, self.sha, self.output)
+            configure_stack(self.directory, self.sha, self.output, FAKE_URI)
         self.assertEqual(self.output.read_bytes(), before)
 
     def test_wrong_or_invalid_checksum_writes_nothing(self):
         for checksum in ("0" * 64, "not a checksum"):
             with self.subTest(checksum=checksum), self.assertRaises(ValueError):
-                configure_stack(self.directory, checksum, self.output)
+                configure_stack(self.directory, checksum, self.output, FAKE_URI)
             self.assertFalse(self.output.exists())
+
+    def test_invalid_atlas_uri_writes_nothing_and_is_not_echoed(self):
+        for uri in ("", "http://example.invalid", "mongodb+srv://u:<password>@c/", "mongodb://u:p w@h/", "mongodb://u:p$x@h/"):
+            with self.subTest(uri=uri), self.assertRaises(ValueError) as caught:
+                configure_stack(self.directory, self.sha, self.output, uri)
+            self.assertNotIn("p w", str(caught.exception))
+            self.assertFalse(self.output.exists())
+        self.assertEqual(validate_mongodb_uri("  mongodb://localhost:27017/  "), "mongodb://localhost:27017/")
+
+    def test_uri_comes_from_environment_or_hidden_prompt_only(self):
+        def no_prompt(_):
+            raise AssertionError("prompt must not be used when MONGODB_URI is set")
+
+        self.assertEqual(obtain_mongodb_uri({"MONGODB_URI": FAKE_URI}, no_prompt), FAKE_URI)
+        asked = []
+        self.assertEqual(obtain_mongodb_uri({}, lambda text: asked.append(text) or FAKE_URI), FAKE_URI)
+        self.assertEqual(len(asked), 1)
+        with self.assertRaises(ValueError):
+            obtain_mongodb_uri({}, lambda text: "not-a-uri")
+
+    def test_setup_script_has_no_uri_argument(self):
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/setup_stack.py"), "--help"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("MONGODB_URI", result.stdout)
+        for flag in ("--mongodb-uri", "--uri", "--atlas-uri"):
+            self.assertNotIn(flag, result.stdout)
+
+    @unittest.skipUnless(shutil.which("docker"), "Docker CLI unavailable")
+    def test_compose_requires_the_atlas_uri(self):
+        env = {key: value for key, value in os.environ.items() if key != "MONGODB_URI"}
+        configure_stack(self.directory, self.sha, self.output, FAKE_URI)
+        lines = [line for line in self.output.read_text().splitlines() if not line.startswith("MONGODB_URI=")]
+        broken = self.directory / "broken.env"
+        broken.write_text("\n".join(lines) + "\n")
+        command = ["docker", "compose", "--env-file", str(broken), "-f", str(ROOT / "compose.yaml"), "config", "-q"]
+        result = subprocess.run(command, env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MONGODB_URI", result.stderr)
 
     @unittest.skipUnless(shutil.which("docker"), "Docker CLI unavailable")
     def test_compose_contract_is_isolated_and_has_no_seeding_or_public_backends(self):
-        configure_stack(self.directory, self.sha, self.output)
+        configure_stack(self.directory, self.sha, self.output, FAKE_URI)
         env = {key: value for key, value in os.environ.items() if key not in dotenv_values(self.output)}
         command = ["docker", "compose", "--env-file", str(self.output), "-f", str(ROOT / "compose.yaml"), "config", "--format", "json"]
         result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
         config = json.loads(result.stdout)
         services = config["services"]
-        self.assertEqual(set(services), {"mongodb", "ollama", "model-init", "chat-service", "gateway", "dashboard"})
+        self.assertEqual(set(services), {"ollama", "model-init", "chat-service", "gateway", "dashboard"})
+        self.assertEqual(config["name"], "ownhelp")
+        self.assertEqual(set(config["volumes"]), {"ollama_models", "hf_cache"})
         devices = services["ollama"]["deploy"]["resources"]["reservations"]["devices"]
         self.assertEqual(devices[0]["driver"], "nvidia")
         self.assertEqual(devices[0]["count"], -1)
         self.assertIn("gpu", devices[0]["capabilities"])
-        for name in ("mongodb", "ollama", "model-init", "chat-service"):
+        for name in ("ollama", "model-init", "chat-service"):
             self.assertFalse(services[name].get("ports"))
         for name in ("gateway", "dashboard"):
             self.assertTrue(all(port["host_ip"] == "127.0.0.1" for port in services[name]["ports"]))
@@ -74,13 +119,15 @@ class DeploymentTests(unittest.TestCase):
         model_mount = next(mount for mount in services["model-init"]["volumes"] if mount["target"] == "/model-import/" + GGUF_FILENAME)
         self.assertTrue(model_mount["read_only"])
         self.assertFalse(model_mount["bind"]["create_host_path"])
-        # Atlas Local must survive container recreation: stable hostname and a named keyfile volume.
-        mongodb = services["mongodb"]
-        self.assertEqual(mongodb["hostname"], "mongodb")
-        targets = {mount["target"]: mount for mount in mongodb["volumes"]}
-        for path in ("/data/db", "/data/mongot", "/data/configdb"):
-            self.assertEqual(targets[path]["type"], "volume")
-            self.assertTrue(targets[path]["source"], path)
+        # The database is the client's Atlas cluster: the URI is passed through unchanged and no
+        # service waits on a (nonexistent) local database.
+        self.assertEqual(gateway["MONGODB_URI"], FAKE_URI)
+        self.assertEqual(gateway["SESSION_COOKIE_NAME"], "ownhelp_session")
+        self.assertEqual(gateway["UPLOAD_STAGING_DIR"], "/tmp/ownhelp_uploads")
+        for name in ("chat-service", "gateway"):
+            self.assertNotIn("mongodb", services[name]["depends_on"])
+        self.assertEqual(services["gateway"]["image"], "ownhelp-runtime:local")
+        self.assertFalse((ROOT / "compose.atlas.yaml").exists())
 
 
 class StandardImageContractTests(unittest.TestCase):

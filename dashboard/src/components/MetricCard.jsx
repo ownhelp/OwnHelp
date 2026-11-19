@@ -1,7 +1,10 @@
 "use client";
 
+/** Small summary tile used on the overview and ticket pages. */
+
 import React from "react";
 
+/** Props: label, value, badge (optional chip), subtext (optional line), monoValue (monospace small value). */
 export default function MetricCard({
     label,
     value,

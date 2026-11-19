@@ -1,5 +1,19 @@
+/**
+ * Server mode and database selection (APP_MODE, MONGODB_DB_NAME, MONGODB_TRAINING_DB_NAME).
+ *
+ * Why this exists: the gateway must never mix the real business database with the synthetic
+ * preset tenants. The mode is chosen by the operator in the environment (never by a request) and
+ * every misconfiguration throws, so a bad deployment fails closed at startup instead of silently
+ * pointing demo logins at production data.
+ *
+ * Input: an env-like object (defaults to process.env). Output: { appMode, activeDbName,
+ * standardDbName, trainingDbName, demoLoginEnabled }.
+ * Callers: server.js (startup), db/mongo.js, middleware/auth.js, routes/auth.js, chat.js,
+ * documents.js, tenants.js.
+ */
 const VALID_APP_MODES = new Set(["standard", "preset_training"]);
 
+/** Unset or blank means "standard"; any other unknown value throws rather than guessing. */
 function validateAppMode(rawMode) {
     if (rawMode === undefined || rawMode === null) {
         return "standard";
@@ -41,6 +55,7 @@ function resolveRuntimeConfig(env = process.env) {
             ? String(env.MONGODB_TRAINING_DB_NAME).trim()
             : "";
 
+    // Same name would let preset seeding write into the real business database.
     if (trainingDbName && trainingDbName === standardDbName) {
         const err = new Error(
             `MONGODB_TRAINING_DB_NAME ('${trainingDbName}') must be distinct from standard MONGODB_DB_NAME ('${standardDbName}').`

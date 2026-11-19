@@ -1,1 +1,1 @@
-"""Chat orchestration for the public widget endpoint (retrieval, prompt assembly, streaming)."""
+"""Chat package: internal HTTP service and per-turn orchestration (retrieval, prompt assembly, generation)."""

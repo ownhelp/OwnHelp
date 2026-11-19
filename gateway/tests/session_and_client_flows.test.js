@@ -1,3 +1,4 @@
+// Protects: end-to-end signup/login/logout flows, cookie handling, login throttling and per-tenant CRUD from a signed-in client.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { createApp } = require("../src/server");
@@ -11,12 +12,12 @@ const { hashSessionToken } = require("../src/middleware/auth");
 
 function extractSessionCookie(response) {
     const setCookie = response.headers.get("set-cookie") || "";
-    const match = setCookie.match(/capstone_session=([^;]+)/);
-    return match ? `capstone_session=${match[1]}` : "";
+    const match = setCookie.match(/ownhelp_session=([^;]+)/);
+    return match ? `ownhelp_session=${match[1]}` : "";
 }
 
 function extractRawToken(cookieHeader) {
-    const match = String(cookieHeader || "").match(/capstone_session=([^;]+)/);
+    const match = String(cookieHeader || "").match(/ownhelp_session=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : "";
 }
 

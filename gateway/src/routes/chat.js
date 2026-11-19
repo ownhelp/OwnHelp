@@ -7,6 +7,16 @@
  * origin allowlist, rate limiting, body cap and input validation. Visitors never reach MongoDB or
  * the model directly; this route loads the tenant, then hands retrieval and generation to the
  * chat backend, which scopes every $vectorSearch by tenant_id.
+ *
+ * Routes (all anonymous; no cookie is read or set):
+ *   OPTIONS /api/chat, /api/chat/contact  204 preflight
+ *   POST    /api/chat          SSE stream (Accept: text/event-stream) or one JSON body; 16 KB cap
+ *   POST    /api/chat/contact  saves a visitor name/email on an escalated ticket; 8 KB cap
+ *
+ * Inputs: widget JSON bodies, tenant document, CHAT_* env settings (chat/config.js).
+ * Outputs: token/done/error events or JSON { error: { code, message } }. The widget embeds these
+ * in third-party pages, which is why the error shape is stable and carries no internals.
+ * Callers: widget/ bundle served from routes/widget.js; any HTTP client.
  */
 const express = require("express");
 const { getBusinessesCollection } = require("../db/mongo");
@@ -15,6 +25,7 @@ const { isPresetTenantId, isValidTenantId } = require("../config/presets");
 const { getChatConfig } = require("../chat/config");
 const { resolveAllowedOrigins, isOriginAllowed } = require("../chat/origins");
 const { getChatBackend } = require("../chat/backend");
+// TODO(gateway-cleanup): merge these two requires of ../chat/escalation into one.
 const { buildEscalationTicket, isEscalation, saveEscalationTicket } = require("../chat/escalation");
 const { withTimeout, SAVE_TIMEOUT_MS } = require("../chat/escalation");
 const { SessionHistory } = require("../chat/sessionHistory");
@@ -71,6 +82,8 @@ function rateLimited(res, retryAfterSec) {
     return sendError(res, 429, "rate_limited", "Too many messages. Please wait a moment.");
 }
 
+// IP limit runs before body parsing and any database work, so a flood is cheap to reject. It uses
+// req.ip, which only reflects the real client when TRUST_PROXY is set behind a reverse proxy.
 function limitByIp(req, res, next) {
     const config = getChatConfig(process.env);
     const result = ipLimiter.hit(`ip:${clientIp(req)}`, config.rateLimitPerIp, config.rateLimitWindowMs);
@@ -197,6 +210,15 @@ async function consumeEvents(iterator, first, sink, isGone) {
     }
 }
 
+/**
+ * POST /api/chat. Auth: none. Order matters: validate input, per-session rate limit, load tenant
+ * (404 unknown_tenant, also for a tenant of the wrong mode so existence is not leaked), check
+ * the tenant's origin allowlist (403 origin_not_allowed), then stream. The tenant id sent to the
+ * backend is the stored one, never the raw request value.
+ * Responses: 200 SSE token/done/error or JSON { answer, follow_up? }; 400 invalid_request /
+ * message_too_long; 403; 404; 429 rate_limited (+ Retry-After); 503 service_unavailable when the
+ * backend fails before the first token (see CHAT_PRE_STREAM_WAIT_MS).
+ */
 async function handleChat(req, res) {
     const body = req.body;
     if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -463,6 +485,13 @@ async function handleChat(req, res) {
     }
 }
 
+/**
+ * POST /api/chat/contact. Auth: the capability token (follow_up_token) issued with an escalation,
+ * not a cookie; it is bound to tenant + session + ticket, so it cannot write to another ticket.
+ * Responses: 200 { status: "saved" }; 400 invalid_request; 403 origin_not_allowed /
+ * invalid_follow_up; 404 unknown_tenant; 409 contact_already_submitted; 429; 503.
+ * "saved" means the database acknowledged the write; no email is sent.
+ */
 async function handleContact(req, res) {
     const body = req.body || {};
     const { tenant_id: tenantId, session_id: sessionId, follow_up_token: token } = body;
@@ -494,6 +523,8 @@ async function handleContact(req, res) {
     }
 }
 
+// Per-route body parsers (small caps) are attached here instead of globally because this router is
+// mounted before server.js's 2 MB express.json, and anonymous callers must get the smaller limit.
 const router = express.Router();
 router.use(applyCorsHeaders);
 router.options("/", handlePreflight);

@@ -6,6 +6,10 @@
  * `cd widget && npm run build:embed`, or point WIDGET_DIST_PATH at another build.
  *
  * This route is public and static: no cookies, no credentials, and none of the admin CORS policy.
+ *
+ * Response: 200 JavaScript (conditional GET 304); 404 widget_not_built JSON when the bundle is
+ * missing; any other method gets 405. Mounted before the admin middleware in server.js.
+ * Callers: third-party storefront <script src=".../widget.js"> tags.
  */
 const path = require("path");
 const express = require("express");
@@ -19,6 +23,8 @@ function getWidgetPath(env = process.env) {
 
 const router = express.Router();
 
+// GET /widget.js. Auth: none. "no-cache" (not "no-store") lets browsers revalidate by ETag, so a
+// rebuilt widget reaches storefronts quickly without re-downloading an unchanged file.
 router.get("/", (req, res) => {
     res.set({
         "Content-Type": "text/javascript; charset=utf-8",

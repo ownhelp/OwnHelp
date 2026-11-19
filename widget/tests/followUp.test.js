@@ -1,3 +1,4 @@
+// Protects follow-up safety: metadata validation, injection-proof mailto/tel links, and stale-callback invalidation on New chat.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeFollowUp, contactLinks, createConversationScope } from "../src/lib/followUp.js";

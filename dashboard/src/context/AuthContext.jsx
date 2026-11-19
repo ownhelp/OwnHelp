@@ -1,5 +1,12 @@
 "use client";
 
+/**
+ * Auth state for the dashboard. The gateway owns the session (a cookie sent via credentials:
+ * "include"); this provider only mirrors it: it loads /api/auth/config and /api/auth/session on
+ * mount and exposes login, signup, demoLogin and logout. sessionVersion increments on every session
+ * change so TenantContext can re-sync.
+ */
+
 import React, {
     createContext,
     useContext,

@@ -1,4 +1,4 @@
-"""Markdown table parsing checks included in unittest discovery."""
+"""Protects Markdown table parsing and linearization (cell cleanup, narrative/row output, replace/augment modes). The checks are plain functions; `load_tests` below wraps them so `unittest discover` runs them."""
 
 import unittest
 

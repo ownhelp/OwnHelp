@@ -1,4 +1,4 @@
-"""Offline checks for automatic vector index setup (mocked MongoDB client, no real database)."""
+"""Protects vector index setup: the shared 384-dim cosine definition with tenant_id/doc_id filters, idempotent creation, state classification and clear permission errors (mocked MongoDB, no real database)."""
 
 import json
 import os
@@ -258,6 +258,9 @@ class IngestionScriptTests(unittest.TestCase):
 
             def _parse_file(self, path):
                 return [{"doc_id": path.stem, "section": "Policy", "text": "Items may be returned within 30 days."}]
+
+            # Reuse the real insert-then-delete logic; it only needs self.collection.
+            replace_chunks = RAGDocumentIngestor.replace_chunks
 
         with tempfile.TemporaryDirectory() as tmp:
             doc = Path(tmp) / "RETURNS.md"

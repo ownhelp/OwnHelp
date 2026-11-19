@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Active-tenant state. The tenant list always comes from the gateway (GET /api/tenants), so the
+ * browser can only select tenants the session is authorized for. The selection is remembered in
+ * localStorage, under a separate key per app mode so demo and standard choices never mix.
+ */
+
 import React, {
     createContext,
     useContext,

@@ -1,3 +1,13 @@
+"""Thin wrapper around the Ollama chat API for schema-constrained support answers.
+
+Inputs: a customer query, formatted context (see ``RAGRetriever.format_context``) and optional
+history. Outputs: the raw JSON string plus timing metrics (``generate_raw``) or a validated
+``SupportResponse`` (``generate``). Model and host come from ``OLLAMA_MODEL`` (default
+``llama3.2:3b``) and ``OLLAMA_HOST`` (default ``http://localhost:11434``).
+Callers: ``src/chat/orchestrator.py`` (live chat, uses ``build_user_prompt`` and the raw client) and
+evaluation scripts under ``scripts/``.
+"""
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,11 +18,11 @@ from ollama import Client
 from src.inference.schema import SupportResponse
 from src.inference.policy import SYSTEM_PROMPT
 
-GRAMMAR_PATH = Path(__file__).resolve().parent / "grammars" / "support_response.gbnf"
-
 
 @dataclass
 class GenerationResult:
+    """A validated model reply with its raw text and timing, as returned by ``generate``."""
+
     response: SupportResponse
     raw: str
     latency_ms: float
@@ -21,6 +31,8 @@ class GenerationResult:
 
 
 class SupportInferenceClient:
+    """Ollama client configured for the support model; one instance is shared by a service."""
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -40,6 +52,9 @@ class SupportInferenceClient:
 
     @staticmethod
     def build_user_prompt(query: str, context: str, history: Optional[list] = None) -> str:
+        """Lays out context first, then history, then the question, so the question is the last thing
+        the small model reads. Empty context is stated explicitly so the model can escalate instead
+        of inventing an answer."""
         history_text = "\n".join(
             f"{'Customer' if turn['role'] == 'user' else 'Support'}: {turn['content']}"
             for turn in (history or [])
@@ -81,6 +96,7 @@ class SupportInferenceClient:
         return capture_ollama_settings(self.client, self.model, {"temperature": self.temperature})
 
     def generate(self, query: str, context: str) -> GenerationResult:
+        """Non-streaming generation that validates the reply against ``SupportResponse``."""
         raw, metrics = self.generate_raw(query, context)
         return GenerationResult(
             response=SupportResponse.model_validate_json(raw),

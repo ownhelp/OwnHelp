@@ -12,6 +12,11 @@
  *
  * Messages returned from here end up in the public /api/health response, so they never contain
  * connection strings, database names or driver error text.
+ *
+ * Inputs: env (MONGODB_VECTOR_INDEX_NAME, MONGODB_COLLECTION_NAME, VECTOR_INDEX_DIMENSIONS,
+ * VECTOR_INDEX_AUTO_SETUP, VECTOR_INDEX_POLL_MS, VECTOR_INDEX_POLL_MAX) and the active database
+ * from ./mongo. Outputs: index state objects.
+ * Callers: server.js (startVectorIndexSetup after listen; status for /api/health).
  */
 const { getDb, getDocVectorsCollection } = require("./mongo");
 

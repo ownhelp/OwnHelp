@@ -1,3 +1,27 @@
+/**
+ * Orchestration Gateway entry point: builds the Express app and starts it.
+ *
+ * Startup order (matters):
+ *   1. loadEnv() runs before any module that reads process.env.
+ *   2. resolveRuntimeConfig() throws on a bad APP_MODE / database setup, so misconfiguration
+ *      aborts boot before any connection is made (fail closed).
+ *   3. connectToDatabase() connects, creates indexes and (preset_training only) seeds fixtures.
+ *   4. app.listen(), then the vector index setup runs in the background; /api/health reports it.
+ *
+ * Middleware stack, in order, and why:
+ *   - trust proxy (TRUST_PROXY) so rate limits see the real client IP.
+ *   - /widget.js and /api/chat: PUBLIC, mounted first so they bypass the admin CORS policy, CSRF
+ *     check and auth, and apply their own origin allowlist and rate limits instead.
+ *   - cors (dashboard origins only, credentials on), 2 MB JSON parser.
+ *   - validateCsrfOrigin on /api: blocks cross-site state-changing requests carrying the cookie.
+ *   - /api/health and public /api/auth: reachable without a session (health exposes only
+ *     readiness booleans; auth is how a session is obtained).
+ *   - requireAuth: everything mounted after this line needs a valid server-side session.
+ *   - protected auth, tenants, documents, tickets routers.
+ *
+ * Exports { app, createApp, startServer } so tests drive the app without opening a port.
+ * Callers: `npm start` / `npm run dev`, the Docker image, tests/*.test.js.
+ */
 // Load .env files before anything reads process.env (PORT, MONGODB_*, CHAT_*, WIDGET_*, ...).
 const path = require("path");
 const { loadEnv } = require("./config/env");
@@ -31,6 +55,9 @@ const ticketsRouter = require("./routes/tickets");
 const { router: chatRouter } = require("./routes/chat");
 const { router: widgetRouter } = require("./routes/widget");
 
+// Health probe for the local model server. Short timeout and booleans only: /api/health is public,
+// so it must not leak hostnames, errors or model lists. Reads OLLAMA_HOST / OLLAMA_MODEL (shared
+// with the Python tooling) purely to report readiness; chat traffic goes through CHAT_BACKEND_URL.
 async function checkOllamaReadiness(env = process.env) {
     const modelRequested = (env.OLLAMA_MODEL || "llama3.2:3b").trim();
     const ollamaHost = (
@@ -149,12 +176,16 @@ function createApp() {
     );
 
     app.use(express.json({ limit: "2mb" }));
+    // TODO(gateway-cleanup): "json spaces" is already set at the top of createApp; remove this
+    // duplicate.
     app.set("json spaces", 4);
 
     // Validate Origin / CSRF on state-changing requests
     app.use("/api", validateCsrfOrigin);
 
     // Explicit Public Routes (Minimal Health + Public Auth Entrypoints)
+    // GET /api/health: no auth (Docker healthcheck and the dashboard call it). Always 200 with
+    // status "ok" or "degraded" (database unreachable); detail is limited to readiness flags.
     app.get("/api/health", async (req, res) => {
         const [dbStatus, ollamaStatus] = await Promise.all([
             checkDatabaseAndVectorReadiness(process.env),
@@ -175,6 +206,7 @@ function createApp() {
         });
     });
 
+    // Public auth entrypoints (config, signup, login, demo-login); see routes/auth.js.
     app.use("/api/auth", publicAuthRouter);
 
     // Authentication Boundary: All subsequent /api routes require a valid server-verified session

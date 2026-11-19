@@ -1,3 +1,4 @@
+// Protects the SSE parser: events survive arbitrary chunk splits and CRLF, heartbeats are ignored, unterminated events are dropped.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSseParser } from "../src/lib/sse.js";

@@ -1,4 +1,4 @@
-"""Unit tests for Sprint 4 Slice 5 deterministic local demo setup and seeding."""
+"""Protects demo seeding: the seeder refuses any non-local or production target, seeds idempotently, detects fixture drift and verifies tenant-scoped vector search (all with mocks)."""
 
 from __future__ import annotations
 
@@ -12,12 +12,15 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from scripts.ingest_uploaded_document import ingest_single_document
+from src.rag.ingestor import RAGDocumentIngestor
+from src.rag.vector_index import build_vector_index_definition
 from src.demo_setup.seeder import (
     DEFAULT_MANIFEST_PATH,
     DemoReadinessTimeoutError,
     DemoSeedError,
     DemoSourceDriftError,
     DemoTargetRefusedError,
+    ensure_local_vector_search_index,
     execute_demo_seed,
     load_demo_manifest,
     plan_demo_seed,
@@ -201,6 +204,22 @@ class FakeIngestor:
 
 
 class DemoSetupTests(unittest.TestCase):
+    def test_seeder_index_definition_equals_shared_definition_and_previous_literal(self):
+        fake_db = FakeDatabase()
+        result = ensure_local_vector_search_index(
+            fake_db["doc_vectors"], index_name="vector_index", num_dimensions=384
+        )
+        # The literal the seeder built before it used the shared helper, so behavior is unchanged.
+        previous = {
+            "fields": [
+                {"type": "vector", "path": "embedding", "numDimensions": 384, "similarity": "cosine"},
+                {"type": "filter", "path": "tenant_id"},
+                {"type": "filter", "path": "doc_id"},
+            ]
+        }
+        self.assertEqual(result["definition"], build_vector_index_definition(384))
+        self.assertEqual(result["definition"], previous)
+
     def test_load_demo_manifest_validates_all_5_presets_and_excludes_held_out_benchmark(self):
         manifest = load_demo_manifest(DEFAULT_MANIFEST_PATH)
         self.assertEqual(manifest["embedding_model"], "BAAI/bge-small-en-v1.5")
@@ -462,6 +481,9 @@ class DemoSetupTests(unittest.TestCase):
 
                 def _parse_file(self, path):
                     return [{"doc_id": path.stem, "section": "Policy", "text": "Items may be returned within 30 days."}]
+
+                # Reuse the real insert-then-delete logic; it only needs self.collection.
+                replace_chunks = RAGDocumentIngestor.replace_chunks
 
             with patch.dict(
                 os.environ,

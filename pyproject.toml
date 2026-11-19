@@ -1,9 +1,13 @@
 [project]
-name = "pro390"
+name = "ownhelp-support"
 version = "0.1.0"
-description = "Self-hosted customer support with tenant-filtered RAG and local model inference."
+description = "OwnHelp: self-hosted customer support with tenant-filtered RAG and local model inference."
 readme = "README.md"
 requires-python = ">=3.14"
+# Runtime dependencies for src/ and scripts/ (retrieval, ingestion, chat service, evaluation).
+# There are no optional extras. uv.lock pins the local development environment; the Docker images
+# install from deployment/requirements.cpu.lock instead (hashed, CPU-only torch).
+# Changing this list means regenerating both lock files; see deployment/README.md.
 dependencies = [
     "ollama>=0.6.3",
     "pydantic>=2.14.1",

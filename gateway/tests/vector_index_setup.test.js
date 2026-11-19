@@ -1,3 +1,4 @@
+// Protects: automatic vector index creation, status classification and the /api/health fields built from it, without leaking driver errors.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");

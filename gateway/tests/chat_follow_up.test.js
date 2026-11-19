@@ -1,3 +1,4 @@
+// Protects: the follow-up capability token and POST /api/chat/contact (binding, expiry, first-submission-wins).
 const { test, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { createApp } = require("../src/server");

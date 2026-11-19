@@ -1,4 +1,4 @@
-"""Shared, lossless-source document parsing for generation and retrieval."""
+"""Documents package: shared, lossless-source document parsing for generation and retrieval."""
 
 from .parser import (
     DocumentBlock, DocumentParseError, ParsedDocument, UnsupportedDocumentError,

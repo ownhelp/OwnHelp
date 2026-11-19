@@ -1,6 +1,11 @@
 /**
  * Environment-driven settings for the public chat endpoint (POST /api/chat).
  * Read at request time so deployments and tests can change them without a restart.
+ *
+ * Why clamp instead of throw: a typo in a tuning value (a negative limit, text) must not take the
+ * public endpoint down; it silently falls back to the documented default. Security-relevant
+ * values (origins, backend token) have no permissive default.
+ * Output: one plain object (see getChatConfig). Callers: routes/chat.js, chat/backend.js.
  */
 
 function intFromEnv(env, name, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {

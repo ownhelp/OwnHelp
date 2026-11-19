@@ -1,17 +1,16 @@
 "use client";
 
+/**
+ * Signup / onboarding route ("/signup"): creates the admin account and the business in one gateway
+ * call. The page previews the tenant_id slug and a generated default system prompt; the gateway
+ * remains the authority for the real tenant_id. Disabled in preset_training mode.
+ */
+
 import React, { useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
-
-const TONE_PRESETS = [
-    "Warm & Professional",
-    "Rugged & Direct",
-    "Empathetic & Clinical",
-    "Technical & Concise",
-    "Friendly & Conversational",
-];
+import { DEFAULT_AGENT_TONE, TONE_PRESETS } from "@/lib/agentDefaults.mjs";
 
 function previewSlug(businessName) {
     if (!businessName) return "your_business_id";
@@ -49,7 +48,7 @@ export default function SignupOnboardingPage() {
     const [businessName, setBusinessName] = useState("");
     const [industry, setIndustry] = useState("");
     const [contactEmail, setContactEmail] = useState("");
-    const [agentTone, setAgentTone] = useState("Warm & Professional");
+    const [agentTone, setAgentTone] = useState(DEFAULT_AGENT_TONE);
     const [customPrompt, setCustomPrompt] = useState("");
     const [useCustomPrompt, setUseCustomPrompt] = useState(false);
 

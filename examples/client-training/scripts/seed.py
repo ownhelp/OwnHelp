@@ -1,4 +1,47 @@
-"""CLI runner for deterministic local demo seeding and vector index verification."""
+"""CLI runner for the optional client-training sandbox seeder.
+
+This is only the runner. The reusable logic (safety validation, manifest hashing,
+embedding, vector index creation) lives in ``src/demo_setup/seeder.py``, which this
+file imports.
+
+Usage (from the repository root)::
+
+    python examples/client-training/scripts/seed.py --dry-run
+    python examples/client-training/scripts/seed.py --execute [--refresh-changed]
+
+Exactly one of ``--dry-run`` or ``--execute`` is required.
+
+Arguments:
+    --dry-run          Validate configuration and fixture hashes, print the plan as
+                       JSON, then exit. Never connects to MongoDB or loads a model.
+    --execute          Seed the five synthetic tenants (businesses, sample tickets,
+                       documents, embedded vector chunks), create ``vector_index``
+                       and wait for it to be READY.
+    --env-file PATH    Demo env file (default: examples/client-training/.env.local).
+                       The repository root .env is never loaded. With --dry-run only,
+                       a missing file falls back to examples/client-training/.env.example.
+    --manifest PATH    Fixture manifest (default: data/fixtures/demo_manifest.json).
+    --refresh-changed  Overwrite previously seeded records whose source fixture hash
+                       changed. Without it, drifted records are left alone.
+    --wait-timeout S   Seconds to wait for the vector index (default: 120).
+    --summary-out PATH JSON summary file written by --execute (default:
+                       examples/client-training/logs/seed_summary.json).
+
+Environment: values are read from the process environment first, then the env file.
+    APP_MODE                  must be ``preset_training`` (required)
+    MONGODB_URI               must be a local mongodb:// URI (required)
+    MONGODB_TRAINING_DB_NAME  demo database, e.g. ``capstone_demo`` (required)
+    MONGODB_DB_NAME           standard database to refuse as a target
+                              (default: rag_knowledge_base)
+    MONGODB_COLLECTION_NAME   default: doc_vectors
+    MONGODB_VECTOR_INDEX_NAME default: vector_index
+    EMBEDDING_MODEL_NAME      default: BAAI/bge-small-en-v1.5
+
+Side effects: --execute writes to the demo MongoDB, downloads the embedding model if
+it is not cached, and writes the summary file (including a failure summary on error).
+Exit code is 0 on success and 1 on any failure. Printed JSON uses 4-space indentation
+and URIs are redacted.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +70,10 @@ from src.demo_setup.seeder import (
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Plan or execute deterministic local demo seeding into an isolated local MongoDB Atlas Local container."
+        description=(
+            "Plan or execute deterministic seeding of the five synthetic client-training tenants "
+            "into an isolated local MongoDB Atlas Local container. Reusable logic: src/demo_setup/seeder.py."
+        )
     )
     mode_group = parser.add_mutually_exclusive_group(required=True)
     mode_group.add_argument(
@@ -43,7 +89,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env-file",
         default=str(DEMO_ROOT / ".env.local"),
-        help="Path to the dedicated demo environment file (defaults to examples/client-training/.env.local; never loads root .env).",
+        help="Path to the dedicated demo environment file (defaults to examples/client-training/.env.local; never loads root .env; with --dry-run a missing file falls back to .env.example).",
     )
     parser.add_argument(
         "--manifest",
@@ -64,12 +110,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--summary-out",
         default=str(DEMO_ROOT / "logs" / "seed_summary.json"),
-        help="Path to write the 4-space indented machine-readable seed summary JSON.",
+        help="Path to write the 4-space indented machine-readable seed summary JSON (--execute only).",
     )
     return parser
 
 
 def resolve_demo_config(env_file_path: Path, *, allow_example_fallback: bool = False) -> dict[str, str]:
+    # Process environment wins over the file so Compose-provided values (container
+    # hostnames, passwords) override anything in a stale .env.local.
     file_vars: dict[str, str] = {}
     target_path = env_file_path
     if not target_path.is_file() and allow_example_fallback:

@@ -1,3 +1,30 @@
+"""Parse tenant documentation and (optionally) replace each tenant's vectors in MongoDB.
+
+Usage:
+    python scripts/ingest_rag_docs.py --inspect-only [--tenant-dir T=PATH ...]
+    python scripts/ingest_rag_docs.py --execute [--document-parser legacy|structured] [--tenant-dir T=PATH ...]
+
+Arguments:
+    --document-parser   structured (default) or legacy. Structured keeps tables whole and checks
+                        embedding token limits before writing, and matches what dashboard uploads
+                        use. Legacy splits by word count and can detach a table row from its
+                        conditions; it remains only for reproducing older chunking.
+    --tenant-dir T=PATH Explicit tenant directory, repeatable. Without it, the five development
+                        tenants under data/ are used.
+    --inspect-only      Print the parsed blocks as JSON; no MongoDB, no embeddings, no network.
+                        Requires --document-parser structured.
+    --execute           Required to write. Without --inspect-only or --execute the script exits.
+
+Environment (.env in the project root, or the process environment):
+    MONGODB_URI (required with --execute; placeholder credentials are rejected),
+    MONGODB_TRAINING_DB_NAME (default capstone_dev; used for the default five tenants),
+    MONGODB_DB_NAME (default rag_knowledge_base; used with --tenant-dir),
+    MONGODB_COLLECTION_NAME (default doc_vectors), EMBEDDING_MODEL_NAME.
+
+Side effects (--execute only): creates the vector index if missing, loads the embedding model,
+and REPLACES all vector chunks of each listed tenant in the selected database.
+"""
+
 import os
 import sys
 import argparse
@@ -20,8 +47,12 @@ TENANT_MAPPINGS = {
 }
 
 def main():
-    parser = argparse.ArgumentParser(description="Inspect document parsing offline; explicitly opt in to database ingestion.")
-    parser.add_argument("--document-parser", choices=["legacy", "structured"], default="legacy")
+    parser = argparse.ArgumentParser(
+        description="Inspect document parsing offline; explicitly opt in to database ingestion.",
+        epilog="Env: MONGODB_URI (required with --execute), MONGODB_TRAINING_DB_NAME, MONGODB_DB_NAME, "
+        "MONGODB_COLLECTION_NAME, EMBEDDING_MODEL_NAME. --execute REPLACES each listed tenant's vectors.",
+    )
+    parser.add_argument("--document-parser", choices=["legacy", "structured"], default="structured")
     parser.add_argument("--tenant-dir", action="append", default=[], metavar="TENANT=PATH",
                         help="Explicit tenant directory; repeatable. Without this flag use project development tenant mappings.")
     parser.add_argument("--inspect-only", action="store_true", help="Inspect shared parsed blocks without MongoDB or embedding initialization.")

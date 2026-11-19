@@ -1,3 +1,4 @@
+// Protects: the anonymous POST /api/chat contract (validation, origin allowlist, rate limits, tenant scoping, SSE/JSON replies, error mapping).
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { createApp } = require("../src/server");

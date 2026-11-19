@@ -1,3 +1,4 @@
+// Protects streamChat/submitContact: request shape, SSE and JSON handling, error mapping, abort and idle timeout.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ChatError, streamChat } from "../src/lib/chatClient.js";

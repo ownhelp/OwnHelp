@@ -4,6 +4,11 @@
  * MongoDB, llama.cpp or the real gateway. It performs no retrieval and no generation.
  * Like the real gateway, it sends reply text without document sources or retrieval metadata. Follow-up capability is issued for messages containing "human".
  *
+ * TODO(mock-gateway): this mock accepts any session_id, any origin and any body size, so it can
+ * pass requests the real gateway rejects (session_id must be 16 to 128 characters of
+ * A-Za-z0-9_.:-, bodies are capped at 16 KB, origins must be allowed per tenant). Enforce those
+ * rules, and move the tests off the placeholder id "s1" afterward.
+ *
  * Run:  npm run mock            (listens on MOCK_PORT, default 4100)
  *
  * Magic words in the visitor message switch behaviors:

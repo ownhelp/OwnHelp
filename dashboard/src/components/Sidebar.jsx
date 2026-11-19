@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * Navigation sidebar: page links, workspace display or switcher, gateway/vector-index health badge
+ * and logout. Responsive: collapses to a top bar with a toggle on small screens.
+ */
+
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -41,6 +46,7 @@ const NAV_ITEMS = [
     },
 ];
 
+/** No props; reads the session from useAuth and the tenant list/selection from useTenant. */
 export default function Sidebar() {
     const pathname = usePathname();
     const router = useRouter();

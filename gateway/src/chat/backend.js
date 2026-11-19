@@ -8,6 +8,14 @@
  *
  * The real backend is the Python chat service (src/chat/server.py), which reuses RAGRetriever
  * ($vectorSearch pre-filtered by tenant_id) and the Ollama client. It speaks newline-delimited JSON.
+ *
+ * Why a separate Python service: the embedding model and reranker load once there instead of per
+ * request, and the gateway reuses the project's one retriever. CHAT_BACKEND_TOKEN is sent as a
+ * shared secret so only the gateway can call it; error messages here are generic because they can
+ * reach logs but never the visitor.
+ *
+ * Inputs: payload { tenant_id, query, history, agent_config, business_contact }.
+ * Callers: routes/chat.js through getChatBackend(); tests via setChatBackend().
  */
 const { getChatConfig } = require("./config");
 

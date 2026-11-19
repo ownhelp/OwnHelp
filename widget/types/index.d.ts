@@ -17,10 +17,15 @@ export interface ChatWidgetProps {
 
 export const ChatWidget: ComponentType<ChatWidgetProps>;
 
+/** Error thrown by `streamChat` and `submitContact`. Show visitors a fixed message, not `message`. */
 export class ChatError extends Error {
+    /** Gateway code (e.g. "rate_limited") or client code ("network_error", "timeout", "aborted", ...). */
     code: string;
+    /** HTTP status, when the error came from a response. */
     status?: number;
-    constructor(code: string, message: string, status?: number);
+    /** Seconds from the `Retry-After` header of a 429, when present. */
+    retryAfterSec?: number;
+    constructor(code: string, message: string, status?: number, retryAfterSec?: number);
 }
 
 export interface StreamChatOptions {
@@ -40,6 +45,7 @@ export interface FollowUp {
     contactEmail?: string;
     contactPhone?: string;
 }
+/** Sends one message and streams the reply; `onToken` receives text deltas. Rejects with `ChatError`. */
 export function streamChat(options: StreamChatOptions): Promise<{ answer: string; sessionId: string; followUp?: FollowUp }>;
 export interface ContactOptions {
     apiUrl: string;
@@ -51,8 +57,11 @@ export interface ContactOptions {
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
 }
+/** Saves visitor contact details for staff follow-up (persisted, not emailed). */
 export function submitContact(options: ContactOptions): Promise<{ status: "saved" }>;
 
+/** Stable per-tenant visitor session id (localStorage, in-memory fallback). */
 export function getSessionId(tenantId: string, storage?: Pick<Storage, "getItem" | "setItem"> | null): string;
 
+/** Creates and persists a fresh session id for the tenant (used by "New chat"). */
 export function newSessionId(tenantId: string, storage?: Pick<Storage, "getItem" | "setItem"> | null): string;
