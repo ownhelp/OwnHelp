@@ -12,20 +12,18 @@ and discarded, so only answer text could ever reach a visitor. Those fields are 
 
 Inputs: raw JSON text fragments from the model. Output: decoded answer characters.
 
-TODO(streaming): this class is not yet used in production. Target: ``ChatOrchestrator.stream`` feeds
-model chunks through ``AnswerStreamer`` and emits many ``token`` events (the gateway's chat route and
-the widget's ``chatClient.js`` already handle repeated token events). The open problem is safety: the
-model returns structured JSON, so the answer must be extracted incrementally while the full reply is
-still validated against ``SupportResponse``, and the handoff safeguard / escalation decision must not
-leak into text already shown to the visitor, because streamed text cannot be retracted.
-
-Status: the current ``ChatOrchestrator.stream`` deliberately does NOT use this class. It buffers the
-whole JSON, validates it against ``SupportResponse`` and runs the handoff safeguard, then emits one
-``token`` event, because already-streamed unsafe text cannot be retracted. Only
-``tests/test_chat_service.py`` exercises it; it is kept for token-level streaming should the
-validation step ever move before display. The SSE framing seen by the widget is done by the Node
-gateway (``gateway/src/routes/chat.js``) from the orchestrator's NDJSON events, not here.
+``GuardedAnswerStream`` (below) wraps ``AnswerStreamer`` for ``ChatOrchestrator.stream``. Streamed text
+cannot be retracted, so it holds back the last ``HOLD_BACK`` decoded characters of the answer until the
+whole reply has been validated against ``SupportResponse`` and the handoff safeguard has run on the
+complete answer. The handoff patterns match phrases of about 60 characters at most, shorter than
+``HOLD_BACK``, so a promise such as
+"I will send you ..." is always seen in full before any of it is released. Text before the held-back
+tail is sent as it is generated; the tail is sent (or replaced by the safe follow-up answer) only after
+validation. The SSE framing seen by the widget is done by the Node gateway
+(``gateway/src/routes/chat.js``) from the orchestrator's NDJSON events, not here.
 """
+
+from typing import Callable
 
 _WHITESPACE = " \t\r\n"
 _SIMPLE_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
@@ -184,3 +182,53 @@ class AnswerStreamer:
                 if self._depth == 0:
                     self._state = "key_or_end"
         # "done": ignore trailing text
+
+
+class GuardedAnswerStream:
+    """Releases answer text early but never the last ``hold_back`` characters, until ``finish``.
+
+    ``is_unsafe`` is the live-product guard (``requires_handoff_safeguard``). Once it matches the text
+    seen so far, no further text is released: the caller's authoritative check on the validated answer
+    decides what the visitor finally sees. Release points are word boundaries so a withheld
+    replacement never follows a half word.
+    """
+
+    HOLD_BACK = 100
+
+    def __init__(self, is_unsafe: Callable[[str], bool], hold_back: int = HOLD_BACK, field: str = "answer"):
+        self._streamer = AnswerStreamer(field)
+        self._is_unsafe = is_unsafe
+        self._hold_back = hold_back
+        self._text = ""
+        self._released = 0
+        self.flagged = False
+
+    @property
+    def released_text(self) -> str:
+        """Answer text already handed to the caller (and so already visible to the visitor)."""
+        return self._text[: self._released]
+
+    def feed(self, chunk: str) -> str:
+        """Consumes a raw model fragment and returns answer text that is safe to show now (maybe empty)."""
+        if self.flagged:
+            return ""
+        decoded = self._streamer.feed(chunk)
+        if not decoded:
+            return ""
+        self._text += decoded
+        if self._is_unsafe(self._text):
+            self.flagged = True
+            return ""
+        end = len(self._text) - self._hold_back
+        while end > self._released and not self._text[end - 1].isspace():
+            end -= 1
+        if end <= self._released:
+            return ""
+        piece = self._text[self._released:end]
+        self._released = end
+        return piece
+
+    def remainder(self, validated_answer: str) -> str:
+        """Returns the part of the validated answer the visitor has not been sent yet."""
+        released = self.released_text
+        return validated_answer[len(released):] if validated_answer.startswith(released) else ""

@@ -54,7 +54,7 @@ All settings come from the environment or the repository `.env` (never committed
 
 ## Known gaps
 
-- `TODO(streaming):` replies are not streamed token by token in production. `chat/orchestrator.py` buffers the whole structured-JSON reply, validates it and emits a single `token` event; `chat/answer_stream.py` (`AnswerStreamer`) is only exercised by a test. Token-by-token streaming must ship before the sprint ends. The gateway (`gateway/src/routes/chat.js`) and widget (`widget/src/lib/chatClient.js`) already handle repeated `token` events. The hard part is extracting the `answer` field incrementally while still validating the full reply and keeping the handoff/escalation decision from leaking early.
+- Streaming limits: replies stream token by token. `chat/orchestrator.py` feeds model chunks through `GuardedAnswerStream` (`chat/answer_stream.py`), which sends the `answer` text as it is generated but holds back the last 100 characters until the full JSON is validated and the handoff safeguard has run on the whole answer. Answers shorter than that arrive in one burst. If the model server dies or the JSON turns out invalid mid-reply, the visitor may already have seen the earlier part of the answer, followed by an error event. If a handoff promise is caught, any text already shown stays and `SAFE_FOLLOWUP_ANSWER` follows it as a new paragraph. The hold-back assumes a promise phrase (about 60 characters at most) is shorter than 100 characters with no huge whitespace runs inside it; the final check on the complete answer still decides `action`.
 
 ## Tests
 
