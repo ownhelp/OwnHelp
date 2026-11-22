@@ -1,6 +1,6 @@
 {
     "name": "@ownhelp/widget",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "type": "module",
     "description": "Embeddable chat widget for a self-hosted, multi-tenant support gateway. Use it as a <script> tag or as a React component.",
     "license": "MIT",

@@ -4,6 +4,7 @@
 // properties on `.cw-root` (the `accentColor` prop overrides `--cw-accent`); a dark palette is
 // applied through prefers-color-scheme.
 export const WIDGET_CSS = `
+:host { all: initial; }
 .cw-root {
     --cw-accent: #1f6feb;
     --cw-accent-text: #ffffff;
