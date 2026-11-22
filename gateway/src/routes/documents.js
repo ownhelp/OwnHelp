@@ -293,6 +293,113 @@ function resetIngestionRunner() {
     activeIngestionRunner = defaultPythonIngestionRunner;
 }
 
+// Mirrors src/rag/reembed.py MAX_CHUNK_CHARS; the worker re-validates, this just fails fast.
+const MAX_CHUNK_TEXT_CHARS = 8000;
+const CHUNK_EDIT_TIMEOUT_MS = 120000;
+const MAX_CONCURRENT_CHUNK_EDITS = 2;
+let chunkEditsInFlight = 0;
+
+// Runs scripts/reembed_chunk.py (same embedding model as ingestion). The new text travels on stdin
+// as JSON, never argv. Only the last stdout line is trusted. The worker writes text and embedding
+// in one update, so a failure (spawn, timeout, model, database) leaves the chunk unchanged.
+function defaultPythonChunkEditRunner({ tenantId, docId, chunkIndex, text, dbName }) {
+    return new Promise((resolve, reject) => {
+        const pythonExecutable = (process.env.PYTHON_EXECUTABLE || "").trim();
+        const scriptArgs = [
+            "-m",
+            "scripts.reembed_chunk",
+            "--tenant",
+            tenantId,
+            "--doc-id",
+            docId,
+            "--chunk-index",
+            String(chunkIndex),
+            "--db-name",
+            dbName,
+        ];
+        let command = "uv";
+        let args = ["run", "python", ...scriptArgs];
+        if (pythonExecutable) {
+            command = pythonExecutable;
+            args = scriptArgs;
+        } else {
+            const venvPython = path.resolve(PROJECT_ROOT, ".venv/bin/python");
+            if (fs.existsSync(venvPython)) {
+                command = venvPython;
+                args = scriptArgs;
+            }
+        }
+
+        const child = spawn(command, args, {
+            cwd: PROJECT_ROOT,
+            env: {
+                ...process.env,
+                MONGODB_DB_NAME: dbName,
+                HF_HUB_DISABLE_PROGRESS_BARS: "1",
+                TOKENIZERS_PARALLELISM: "false",
+            },
+        });
+
+        let stdout = "";
+        let timedOut = false;
+        const timer = setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGKILL");
+        }, CHUNK_EDIT_TIMEOUT_MS);
+
+        child.stdout.on("data", (data) => {
+            stdout += data.toString();
+        });
+        // stderr is drained but never surfaced: it can contain library noise or connection details.
+        child.stderr.on("data", () => {});
+        child.stdin.on("error", () => {});
+        child.stdin.end(JSON.stringify({ text }));
+
+        child.on("error", (err) => {
+            clearTimeout(timer);
+            reject(new Error(`Failed to spawn chunk edit process: ${err.message}`));
+        });
+
+        child.on("close", (code) => {
+            clearTimeout(timer);
+            if (timedOut) {
+                const err = new Error("Chunk edit timed out; nothing was changed.");
+                err.code = "EDIT_ERROR";
+                return reject(err);
+            }
+            const lines = stdout
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean);
+            let parsed = null;
+            try {
+                parsed = JSON.parse(lines[lines.length - 1] || "");
+            } catch {
+                parsed = null;
+            }
+            if (code === 0 && parsed && parsed.status === "success") {
+                return resolve(parsed);
+            }
+            const err = new Error(
+                (parsed && parsed.error) ||
+                    `Chunk edit process exited with code ${code}`
+            );
+            err.code = (parsed && parsed.code) || "EDIT_ERROR";
+            reject(err);
+        });
+    });
+}
+
+let activeChunkEditRunner = defaultPythonChunkEditRunner;
+
+function setChunkEditRunner(runner) {
+    activeChunkEditRunner = runner || defaultPythonChunkEditRunner;
+}
+
+function resetChunkEditRunner() {
+    activeChunkEditRunner = defaultPythonChunkEditRunner;
+}
+
 /**
  * POST /api/documents/upload
  * Auth: session cookie; multipart field `file` (.md/.json) plus optional `doc_id`, `overwrite`.
@@ -589,19 +696,34 @@ router.get("/tenants/:tenantId/documents/:docId", async (req, res) => {
     }
 });
 
+// Shapes a stored doc_vectors row for the dashboard (adds counts and a snippet; no embedding).
+function formatChunk(chunk) {
+    const text = chunk.text || "";
+    const charCount = text.length;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const tokenEstimate = Math.max(1, Math.ceil(words * 1.3));
+    const snippet = text.length > 160 ? `${text.slice(0, 160).trim()}...` : text;
+
+    return {
+        tenant_id: chunk.tenant_id,
+        doc_id: chunk.doc_id,
+        chunk_index: chunk.chunk_index,
+        section: chunk.section || "Overview",
+        snippet,
+        text,
+        char_count: charCount,
+        word_count: words,
+        token_estimate: tokenEstimate,
+        created_at: chunk.created_at || null,
+    };
+}
+
 /**
  * GET /api/tenants/:tenantId/chunks
  * Auth: session cookie, tenant must match the session. Query: doc_id, page, limit.
  * Response 200 { chunks, total, page, limit, total_pages }. The embedding vector is projected out
  * (large, useless to the UI); limit is capped server side.
  * Returns paginated chunks for the session-authorized tenant.
- *
- * TODO(chunk-editing): this is the only chunk route and it is read-only. Manual chunk editing
- * needs PUT (edit text, re-embed) and DELETE routes under the same tenant check, a way to run the
- * embedding model from the gateway (today only the Python side embeds, so this likely calls the
- * chat service or a script), tests like the upload ones, and a doc_vectors write that follows the
- * replace_chunks pattern so a failure never loses the chunk. Never add fields to the doc_vectors
- * schema.
  */
 router.get("/tenants/:tenantId/chunks", async (req, res) => {
     try {
@@ -651,27 +773,7 @@ router.get("/tenants/:tenantId/chunks", async (req, res) => {
                 .toArray(),
         ]);
 
-        const chunks = rawChunks.map((chunk) => {
-            const text = chunk.text || "";
-            const charCount = text.length;
-            const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-            const tokenEstimate = Math.max(1, Math.ceil(words * 1.3));
-            const snippet =
-                text.length > 160 ? `${text.slice(0, 160).trim()}...` : text;
-
-            return {
-                tenant_id: chunk.tenant_id,
-                doc_id: chunk.doc_id,
-                chunk_index: chunk.chunk_index,
-                section: chunk.section || "Overview",
-                snippet,
-                text,
-                char_count: charCount,
-                word_count: words,
-                token_estimate: tokenEstimate,
-                created_at: chunk.created_at || null,
-            };
-        });
+        const chunks = rawChunks.map(formatChunk);
 
         return res.json({
             tenant_id: authorizedTenantId,
@@ -692,7 +794,116 @@ router.get("/tenants/:tenantId/chunks", async (req, res) => {
     }
 });
 
+/**
+ * PUT /api/tenants/:tenantId/chunks/:docId/:chunkIndex
+ * Auth: session cookie (tenant must match the session; the URL tenant is only checked, never
+ * trusted). CSRF: the /api validateCsrfOrigin middleware covers PUT like every state-changing route.
+ * Body: { "text": string } (trimmed, 1..8000 chars). The tenant is never read from the body.
+ * Response 200 { chunk } (the stored chunk as listed by GET .../chunks, from the database, not an
+ * echo of the request); 400 invalid doc_id/index/text or text over the embedding token limit;
+ * 404 no such chunk for this tenant; 429 too many edits in progress; 500 embedding or database
+ * failure (the chunk is unchanged: text and embedding are written together by one update only
+ * after the new embedding exists).
+ * Re-embedding runs in scripts/reembed_chunk.py with the ingestion model (BAAI/bge-small-en-v1.5).
+ */
+router.put("/tenants/:tenantId/chunks/:docId/:chunkIndex", async (req, res) => {
+    try {
+        const authorizedTenantId = authorizeTenantAccess(
+            req,
+            res,
+            req.params.tenantId
+        );
+        if (!authorizedTenantId) return;
+
+        const docId = req.params.docId;
+        if (!isValidDocId(docId)) {
+            return res.status(400).json({ error: "Invalid doc_id." });
+        }
+        if (!/^\d{1,9}$/.test(req.params.chunkIndex)) {
+            return res.status(400).json({ error: "Invalid chunk index." });
+        }
+        const chunkIndex = parseInt(req.params.chunkIndex, 10);
+
+        const rawText = req.body && req.body.text;
+        if (typeof rawText !== "string") {
+            return res.status(400).json({ error: "Chunk text must be a string." });
+        }
+        const text = rawText.trim();
+        if (!text) {
+            return res.status(400).json({ error: "Chunk text must not be empty." });
+        }
+        if (text.length > MAX_CHUNK_TEXT_CHARS) {
+            return res.status(400).json({
+                error: `Chunk text must be at most ${MAX_CHUNK_TEXT_CHARS} characters.`,
+            });
+        }
+
+        const scope = {
+            tenant_id: authorizedTenantId,
+            doc_id: docId,
+            chunk_index: chunkIndex,
+        };
+        const docVectors = await getDocVectorsCollection();
+        const existing = await docVectors.findOne(scope, {
+            projection: { _id: 1 },
+        });
+        if (!existing) {
+            return res.status(404).json({ error: "Chunk not found." });
+        }
+
+        if (chunkEditsInFlight >= MAX_CONCURRENT_CHUNK_EDITS) {
+            return res.status(429).json({
+                error: "Other chunk edits are still being embedded. Try again shortly.",
+            });
+        }
+        chunkEditsInFlight += 1;
+        try {
+            await activeChunkEditRunner({
+                tenantId: authorizedTenantId,
+                docId,
+                chunkIndex,
+                text,
+                dbName: getActiveDatabaseName(process.env),
+            });
+        } catch (error) {
+            console.error(
+                "[PUT /api/tenants/:tenantId/chunks] Error:",
+                error.message
+            );
+            if (error.code === "NOT_FOUND") {
+                return res.status(404).json({ error: "Chunk not found." });
+            }
+            if (error.code === "VALIDATION_ERROR") {
+                return res.status(400).json({
+                    error: safeStreamErrorMessage(error, null),
+                });
+            }
+            return res.status(500).json({
+                error: "Failed to re-embed the chunk. It was not changed.",
+            });
+        } finally {
+            chunkEditsInFlight -= 1;
+        }
+
+        const stored = await docVectors.findOne(scope, {
+            projection: { _id: 0, embedding: 0 },
+        });
+        if (!stored) {
+            return res.status(404).json({ error: "Chunk not found." });
+        }
+        return res.json({ chunk: formatChunk(stored) });
+    } catch (error) {
+        console.error(
+            "[PUT /api/tenants/:tenantId/chunks] Error:",
+            error.message
+        );
+        return res.status(500).json({ error: "Failed to edit the chunk." });
+    }
+});
+
 module.exports = router;
+module.exports.setChunkEditRunner = setChunkEditRunner;
+module.exports.resetChunkEditRunner = resetChunkEditRunner;
 module.exports.setIngestionRunner = setIngestionRunner;
 module.exports.resetIngestionRunner = resetIngestionRunner;
 module.exports.resolveSafePresetSourcePath = resolveSafePresetSourcePath;

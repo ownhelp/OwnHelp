@@ -54,8 +54,18 @@ bash examples/client-training/scripts/setup.sh setup --with-ollama
 bash examples/client-training/scripts/setup.sh pull-model
 ```
 
-Note that `setup.sh --with-ollama` (option first) is not accepted; write `setup --with-ollama`.
+Options may come before or after the action, so `setup.sh --with-ollama` also works.
 Pass `--with-ollama` to `start` as well when you restart a bundled-Ollama stack.
+
+On a machine with an NVIDIA GPU, use `--with-ollama-gpu` instead (it implies `--with-ollama`):
+
+```bash
+bash examples/client-training/scripts/setup.sh setup --with-ollama-gpu
+```
+
+This requires the NVIDIA driver and the NVIDIA Container Toolkit; on hosts without them the
+bundled Ollama fails to start, so use plain `--with-ollama` there. Pass the flag on `start`
+too when restarting a GPU stack.
 
 Open the dashboard at <http://localhost:3001/login> and the gateway health endpoint at
 <http://localhost:4001/api/health>. The script prints these and a seed summary when ready.
@@ -90,8 +100,8 @@ stack or the repository root `.env`.
   `docker exec ownhelp_client_training-chat-service-demo-1 node -e 'fetch("http://host.docker.internal:11434/api/tags").then(r=>console.log(r.status))'`
   and expect `200`.
 - **Bundled Ollama.** `--with-ollama` starts `ollama-demo` and points the containers at
-  `http://ollama-demo:11434` for that invocation. It is CPU-only as written unless you add
-  GPU access to the service in `compose.yaml`. Models are stored in the `demo_ollama_models`
+  `http://ollama-demo:11434` for that invocation. It is CPU-only unless you pass
+  `--with-ollama-gpu`, which layers `compose.gpu.yaml` (an NVIDIA GPU reservation). Models are stored in the `demo_ollama_models`
   volume.
 
 Set `OLLAMA_MODEL` in `.env.local` to choose the model tag. The dashboard, login, tickets,

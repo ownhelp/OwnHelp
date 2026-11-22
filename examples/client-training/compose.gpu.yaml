@@ -1,0 +1,12 @@
+# Opt-in NVIDIA GPU override for the bundled Ollama (`setup.sh setup --with-ollama-gpu`).
+# Layered on top of compose.yaml by scripts/setup.sh only when the flag is given, so hosts
+# without the NVIDIA Container Toolkit never see this reservation and keep working on CPU.
+services:
+  ollama-demo:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

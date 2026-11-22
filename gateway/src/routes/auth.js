@@ -54,16 +54,11 @@ const MAX_LOGIN_ATTEMPTS = 8;
 const MAX_TRACKED_KEYS = 1000;
 const loginAttempts = new Map();
 
-// TODO(login-rate-limit-proxy): behind a reverse proxy req.ip is the proxy's address unless
-// TRUST_PROXY is set, so all clients share one rate-limit bucket per email. Document or enforce
-// TRUST_PROXY in standard mode, and drop the raw x-forwarded-for fallback below (a client can
-// send that header itself, so it must not decide the key).
+// The key uses req.ip only (never the raw x-forwarded-for header, which a client can set itself).
+// server.js configures Express "trust proxy" from TRUST_PROXY, so behind a reverse proxy such as a
+// Cloudflare Tunnel (TRUST_PROXY=1) req.ip is the real client address.
 function getRateLimitKey(req, email) {
-    const ip =
-        req.ip ||
-        req.headers["x-forwarded-for"] ||
-        req.socket?.remoteAddress ||
-        "unknown";
+    const ip = req.ip || req.socket?.remoteAddress || "unknown";
     return `${ip}:${email || "unknown"}`;
 }
 
@@ -77,16 +72,14 @@ function checkLoginRateLimit(key) {
         return { allowed: true };
     }
 
-    if (record.count >= MAX_LOGIN_EMPTS_LIMIT()) {
+    if (record.count >= maxLoginAttempts()) {
         return { allowed: false };
     }
 
     return { allowed: true };
 }
 
-// TODO(gateway-cleanup): rename to maxLoginAttempts (typo "EMPTS", and it is a function, not a
-// constant) and update its single call site in checkLoginRateLimit.
-function MAX_LOGIN_EMPTS_LIMIT() {
+function maxLoginAttempts() {
     return Number(process.env.LOGIN_RATE_LIMIT_MAX) || MAX_LOGIN_ATTEMPTS;
 }
 
@@ -654,5 +647,6 @@ module.exports = {
     publicAuthRouter,
     protectedAuthRouter,
     resetLoginRateLimiter,
+    getRateLimitKey,
 };
 

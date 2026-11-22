@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ChatError, streamChat } from "../src/lib/chatClient.js";
-import { isRetryable, visitorMessage } from "../src/lib/messages.js";
+import { contactMessage, isRetryable, visitorMessage } from "../src/lib/messages.js";
 
 const UNSAFE = /traceback|stack|mongo|ollama|exception|undefined|internal|localhost|127\.0\.0\.1|token/i;
 
@@ -60,6 +60,45 @@ test("rate limit message uses Retry-After", () => {
     assert.match(visitorMessage(new ChatError("rate_limited", "x", 429, 60)), /wait 60 seconds/);
     assert.match(visitorMessage(new ChatError("rate_limited", "x", 429, 180)), /wait 3 minutes/);
     assert.match(visitorMessage(new ChatError("rate_limited", "x", 429)), /wait a moment/);
+});
+
+test("contact failures map to specific, safe messages", () => {
+    const codes = [
+        "invalid_request",
+        "origin_not_allowed",
+        "invalid_follow_up",
+        "contact_already_submitted",
+        "service_unavailable",
+        "network_error",
+        "timeout",
+        "rate_limited",
+    ];
+    const seen = new Set();
+    for (const code of codes) {
+        const text = contactMessage(new ChatError(code, "server said: Traceback at mongo://internal", 400));
+        assert.ok(text.length > 10, code);
+        assert.doesNotMatch(text, UNSAFE, code);
+        assert.ok(!text.includes("server said"), `${code} must not echo the server's text`);
+        seen.add(text);
+    }
+    assert.equal(seen.size, codes.length, "each code has its own wording");
+    assert.match(contactMessage(new ChatError("invalid_follow_up", "x", 403)), /expired/);
+    assert.match(contactMessage(new ChatError("contact_already_submitted", "x", 409)), /already saved/);
+});
+
+test("contact rate limit uses Retry-After and a missing header reads 'a moment'", () => {
+    assert.match(contactMessage(new ChatError("rate_limited", "x", 429, 12)), /wait 12 seconds/);
+    assert.match(contactMessage(new ChatError("rate_limited", "x", 429, 180)), /wait 3 minutes/);
+    assert.match(contactMessage(new ChatError("rate_limited", "x", 429)), /wait a moment/);
+});
+
+test("contact: an abort (the widget's own time limit) reads as a timeout; unknowns fall back safely", () => {
+    assert.equal(contactMessage(new ChatError("aborted", "x")), contactMessage(new ChatError("timeout", "x")));
+    assert.match(contactMessage(new ChatError("http_502", "x", 502)), /try again shortly/);
+    const fallback = contactMessage(new ChatError("weird_code", "ECONNREFUSED 10.0.0.5", 400));
+    assert.equal(fallback, "Your details could not be saved. Please try again or contact the business directly.");
+    assert.equal(contactMessage(undefined), fallback);
+    assert.equal(contactMessage(new ChatError("constructor", "x", 400)), fallback);
 });
 
 test("streamChat carries the Retry-After header on a 429", async () => {

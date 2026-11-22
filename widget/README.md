@@ -95,7 +95,10 @@ npm run build   # dist/widget.js (script tag) and dist/lib/index.js (React impor
 
 In the mock, a message containing `human` returns follow-up metadata, `nostream` the JSON fallback,
 and `ratelimit`, `unknown`, `error`, `cutoff` and `slow` exercise failures (see the header of
-`mock/mock_gateway.js`). The mock saves nothing; use fictional data.
+`mock/mock_gateway.js`). The mock saves nothing; use fictional data. It enforces the real gateway's
+input rules (session id format, size caps, origin allowlist). By default it allows the Vite dev and
+preview origins on localhost and 127.0.0.1; set `MOCK_ALLOWED_ORIGINS` (comma separated) to serve the
+host page from elsewhere.
 
 ## Publish checklist
 
