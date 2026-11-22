@@ -88,6 +88,7 @@ Compose reads `.env.compose.local` (see `.env.compose.example`). Required variab
 | `NEXT_PUBLIC_GATEWAY_URL` | no | Gateway URL as seen by the browser; baked into the dashboard image at build time, so changing it requires a rebuild. |
 | `ALLOWED_ORIGINS` | no | Comma-separated origins the gateway accepts for the dashboard. Must include the dashboard URL. |
 | `SESSION_COOKIE_NAME` | no (default `ownhelp_session`) | Dashboard session cookie name. |
+| `TRUST_PROXY` | no (default empty) | Number of reverse proxies in front of the gateway, so rate limits see the real visitor address. Set `1` behind a Cloudflare Tunnel or one reverse proxy. Not written by `setup_stack.py`; add it yourself. |
 
 Values that Compose fixes for the runtime (not user settings): `MONGODB_COLLECTION_NAME=doc_vectors`, `MONGODB_VECTOR_INDEX_NAME=vector_index`, `EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5`, `OLLAMA_HOST=http://ollama:11434`.
 
@@ -174,9 +175,21 @@ Verified on the development machine (Ubuntu, RTX 4060 with 8 GB VRAM) with the c
 
 Verified only on an earlier revision that used a bundled MongoDB container, and not repeated on the Atlas-only stack: tenant isolation in both directions, safe escalation, contact capture, ticket review, New chat, and single-service outages with recovery.
 
+Re-checked read-only on 2026-11-21 against the running local stack (no containers started, stopped or rebuilt, no data written): `docker ps` showed the `ownhelp` dashboard, gateway, chat-service and ollama containers all `healthy`, and `GET http://127.0.0.1:4002/api/health` returned `app_mode: standard`, `database_ready: true`, `vector_index_ready: true` (`vector_index_state: ready`), `ollama_ready: true`, with the model `llama3.2:3b-qlora-hardneg-full01-q4` requested. The startup auto-setup record read `attempted: true, index_created: false`, so the index was found already existing rather than created. This check did not exercise login, upload, chat, or the Python ingestion subprocess.
+
+Not verified on 2026-11-21 (needs a logged-in dashboard session): a real dashboard document upload through the Python ingestion subprocess, the first-ingest delay on a freshly created vector index, and a one-time model re-import after changing the GGUF.
+
+Manual checklist for those three:
+
+1. Upload: sign in to the dashboard, upload a small `.md` document, and confirm it appears in the document list with a nonzero chunk count and no error; then ask the widget a question only that document can answer and check the answer cites it. Delete the test document afterward.
+2. First-ingest delay: on a scratch Atlas cluster or database with no `vector_index`, start the stack, note when `/api/health` reports `vector_index_ready: true`, upload a document, and time how long until a question about it retrieves its chunks. Record both times.
+3. Model re-import: change `MODEL_GGUF_DIR`/`MODEL_GGUF_SHA256` to a new file, run `docker compose --env-file .env.compose.local up -d --wait`, confirm `model-init` logs the checksum check and import once, then restart and confirm it logs a skip.
+
 Not verified: automatic creation of the vector index (the index already existed on the cluster used), a measured first-ingest index delay (the delay described above is expected behavior), a different machine or a cold Docker cache, GPUs other than the RTX 4060, other browsers, and sustained or concurrent load.
 
 ## Troubleshooting
+
+To put the stack on a public website, see [Put the assistant on your website](../README.md#put-the-assistant-on-your-website) in the main README. For a longer troubleshooting guide, see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md); [`architecture.svg`](architecture.svg) is a diagram of the services. Quick answers:
 
 - `Set MODEL_GGUF_DIR` or similar: `.env.compose.local` is missing or incomplete; pass `--env-file .env.compose.local`.
 - `model-init` fails with "GGUF checksum mismatch": the file in `MODEL_GGUF_DIR` is not the one whose digest you configured.
