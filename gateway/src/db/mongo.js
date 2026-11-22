@@ -16,9 +16,11 @@ const dotenv = require("dotenv");
 const { PRESET_TENANTS, SAMPLE_TICKETS } = require("../config/presets");
 const { resolveRuntimeConfig } = require("../config/mode");
 
-// TODO(gateway-cleanup): config/env.js already loads .env files at startup (and logs which ones),
-// so these two dotenv calls are redundant and use a different search order. Remove them once
-// tests that require this module without env.js are checked.
+// TODO(gateway-cleanup): config/env.js (called first in server.js) loads the repo-root and gateway
+// .env files, so the root load below is redundant. The bare dotenv.config() call is NOT redundant: it is the only
+// thing that loads a .env from the process working directory, which
+// tests/env_loading.test.js ("picks up a .env in the working directory") depends on. Removing it
+// needs env.js to search process.cwd() first.
 // Load .env from project root without clobbering explicit CLI environment variables
 const rootEnvPath = path.resolve(__dirname, "../../../.env");
 dotenv.config({ path: rootEnvPath, override: false });

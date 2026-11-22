@@ -13,10 +13,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from src.chat.answer_stream import AnswerStreamer
+from src.chat.answer_stream import AnswerStreamer, GuardedAnswerStream
 from src.chat.orchestrator import AgentConfig, ChatOrchestrator, ChatServiceRequest, build_system_prompt
 from src.chat.server import ENV_FILE, TOKEN_HEADER, load_env, make_handler
 from src.inference.client import SYSTEM_PROMPT, SupportInferenceClient
+from src.inference.policy import requires_handoff_safeguard
 
 
 def stream_all(text, sizes):
@@ -60,6 +61,32 @@ class AnswerStreamerTests(unittest.TestCase):
         streamer = AnswerStreamer()
         self.assertEqual(streamer.feed('{"confidence": 0.1, "action": "escalate"}'), "")
         self.assertFalse(streamer.answer_started)
+
+
+class GuardedAnswerStreamTests(unittest.TestCase):
+    def run_guard(self, answer, size, hold_back=20):
+        text = json.dumps({"answer": answer, "cited_sources": [], "confidence": 1, "action": "answer"})
+        guard = GuardedAnswerStream(requires_handoff_safeguard, hold_back=hold_back)
+        released = "".join(guard.feed(text[i:i + size]) for i in range(0, len(text), size))
+        return guard, released
+
+    def test_withholds_the_tail_and_remainder_completes_the_answer(self):
+        answer = "word " * 30
+        for size in (1, 4, 13):
+            guard, released = self.run_guard(answer, size)
+            self.assertTrue(answer.startswith(released))
+            self.assertLessEqual(len(released), len(answer) - 20)
+            self.assertEqual(released + guard.remainder(answer), answer)
+
+    def test_stops_releasing_once_a_promise_is_seen(self):
+        answer = "Thanks for waiting. " * 5 + "I will send your request now. " + "More text. " * 20
+        guard, released = self.run_guard(answer, 3)
+        self.assertTrue(guard.flagged)
+        self.assertNotIn("I will", released)
+
+    def test_releases_only_at_word_boundaries(self):
+        guard, released = self.run_guard("alpha beta gamma delta epsilon zeta eta theta", 2, hold_back=10)
+        self.assertTrue(released == "" or released.endswith(" "))
 
 
 def make_chunk(tenant="tenant_a", doc="policy", section="Returns", score=0.8, text="SECRET CHUNK TEXT"):
@@ -230,6 +257,59 @@ class OrchestratorTests(unittest.TestCase):
     def test_invalid_json_emits_no_unvalidated_answer_tokens(self):
         events = list(self.build(pieces=['{"answer":"I am connecting you now"']).stream(self.request()))
         self.assertFalse(any(e["type"] == "token" for e in events))
+
+    LONG_ANSWER = " ".join(f"Sentence {n} explains the documented return policy." for n in range(1, 13))
+
+    def token_texts(self, events):
+        return [e["text"] for e in events if e["type"] == "token"]
+
+    def test_long_answers_stream_as_many_tokens_and_reassemble_exactly(self):
+        for size in (1, 3, 11):
+            events = list(self.build(pieces=split(model_json(self.LONG_ANSWER), size)).stream(self.request()))
+            tokens = self.token_texts(events)
+            self.assertGreater(len(tokens), 1, size)
+            self.assertEqual("".join(tokens), self.LONG_ANSWER)
+            self.assertEqual(events[-1]["type"], "done")
+            # The first token is sent before the model has finished: it precedes the done event
+            # and is shorter than the whole answer.
+            self.assertLess(len(tokens[0]), len(self.LONG_ANSWER))
+
+    def test_the_held_back_tail_is_only_sent_after_validation(self):
+        reply = model_json(self.LONG_ANSWER)
+        # The model stops after the answer, before the closing fields: nothing validates.
+        cut = reply.index('", "cited_sources"')
+        events = list(self.build(pieces=split(reply[:cut], 5)).stream(self.request()))
+        streamed = "".join(self.token_texts(events))
+        self.assertTrue(self.LONG_ANSWER.startswith(streamed))
+        self.assertLessEqual(len(streamed), len(self.LONG_ANSWER) - GuardedAnswerStream.HOLD_BACK)
+        self.assertEqual(events[-1]["type"], "error")
+
+    def test_handoff_promise_inside_a_long_streamed_answer_never_leaks(self):
+        unsafe = "I am connecting you with a team member now."
+        for size in (1, 2, 7):
+            for position in ("start", "middle", "end"):
+                text = {
+                    "start": unsafe + " " + self.LONG_ANSWER,
+                    "middle": self.LONG_ANSWER[:200] + " " + unsafe + " " + self.LONG_ANSWER[200:],
+                    "end": self.LONG_ANSWER + " " + unsafe,
+                }[position]
+                events = list(self.build(pieces=split(model_json(text), size)).stream(self.request()))
+                shown = "".join(self.token_texts(events))
+                self.assertNotIn("connecting", shown, (size, position))
+                self.assertIn("contact form", shown, (size, position))
+                self.assertEqual(events[-1]["action"], "escalate", (size, position))
+                self.assertEqual(events[-1]["cited_sources"], [], (size, position))
+
+    def test_text_shown_before_a_replaced_promise_is_kept_and_the_safe_answer_follows(self):
+        unsafe = "We will email you shortly."
+        text = self.LONG_ANSWER + " " + unsafe
+        events = list(self.build(pieces=split(model_json(text), 4)).stream(self.request()))
+        shown = "".join(self.token_texts(events))
+        prefix, safe = shown.split("\n\n", 1)
+        self.assertTrue(text.startswith(prefix))
+        self.assertTrue(prefix)
+        self.assertNotIn(unsafe, shown)
+        self.assertTrue(safe.startswith("This request needs help from the business."))
 
     def test_verified_business_contact_is_passed_without_inventing_missing_phone(self):
         orchestrator = self.build()

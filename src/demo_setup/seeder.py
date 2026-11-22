@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
+from bson import ObjectId
 from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
 
@@ -547,6 +548,44 @@ def verify_vector_search_smoke_query(
         sleep_fn(poll_interval_seconds)
 
 
+def replace_chunks_safely(
+    collection: Any, scope: Dict[str, Any], documents: List[Dict[str, Any]]
+) -> int:
+    """Swap the chunks matching ``scope`` for ``documents`` without a window where data is lost.
+
+    New documents get pre-generated ``_id`` values (no schema field is added), are inserted, and the
+    inserted count is verified. Only then are the older documents matching ``scope`` removed. If the
+    insert raises or reports a short count, the previous documents are left untouched, any partially
+    inserted new ids are removed best-effort, and the error is raised.
+    """
+    if not documents:
+        return 0
+    new_ids = [ObjectId() for _ in documents]
+    for document, new_id in zip(documents, new_ids):
+        document["_id"] = new_id
+
+    def _discard_new() -> None:
+        try:
+            collection.delete_many({"_id": {"$in": new_ids}})
+        except Exception:
+            pass
+
+    try:
+        result = collection.insert_many(documents)
+    except Exception:
+        _discard_new()
+        raise
+    inserted = len(getattr(result, "inserted_ids", None) or [])
+    if inserted != len(documents):
+        _discard_new()
+        raise DemoSeedError(
+            f"Insert verification failed: expected {len(documents)} chunks, "
+            f"inserted {inserted}. Previous documents were left in place."
+        )
+    collection.delete_many({**scope, "_id": {"$nin": new_ids}})
+    return len(documents)
+
+
 def execute_demo_seed(
     *,
     app_mode: Optional[str],
@@ -842,14 +881,12 @@ def execute_demo_seed(
                     }
                 )
 
-            # TODO(seeder-replace): delete-then-insert is not safe against a failed insert (it
-            # leaves these documents empty). Use RAGDocumentIngestor.replace_chunks (insert first,
-            # then delete the old ids) with scope {"tenant_id": tid, "doc_id": {"$in": ...}}.
-            # Low priority: this only runs against disposable demo databases.
-            vectors_col.delete_many(
-                {"tenant_id": tid, "doc_id": {"$in": sorted(expected_doc_ids)}}
+            # Insert-first replace: the previous chunks survive if the insert fails.
+            replace_chunks_safely(
+                vectors_col,
+                {"tenant_id": tid, "doc_id": {"$in": sorted(expected_doc_ids)}},
+                docs_to_insert,
             )
-            vectors_col.insert_many(docs_to_insert)
 
             doc_counts["tenants_ingested"] += 1
             doc_counts["documents_indexed"] += len(expected_doc_ids)

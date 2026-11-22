@@ -29,7 +29,7 @@ A visitor receives the answer text, the escalation payload when a human is neede
 ## Sessions and abuse controls
 
 - Dashboard sessions are random 256-bit tokens in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over HTTPS or in production). Only a SHA-256 hash is stored, and sessions expire after 12 hours.
-- Failed logins are throttled and give one error message for every failure.
+- Failed logins are throttled per client IP and email and give one error message for every failure. The throttle key uses the connection address Express reports, never a client-supplied `X-Forwarded-For` header, so behind a proxy such as a Cloudflare Tunnel you must set `TRUST_PROXY=1` or every visitor shares one bucket per email.
 - Rate limits are in memory and per process. Use a shared store before running several replicas, and set `TRUST_PROXY` when running behind a proxy, otherwise all clients behind it share one IP.
 - Uploads are limited to allowlisted extensions and 10 MB, file names are sanitized, and staged files are always deleted.
 

@@ -25,6 +25,7 @@ from src.demo_setup.seeder import (
     load_demo_manifest,
     plan_demo_seed,
     redact_mongo_uri,
+    replace_chunks_safely,
     validate_demo_environment_and_target,
     wait_for_vector_index_ready,
 )
@@ -107,6 +108,9 @@ class FakeCollection:
             for k, v in query.items():
                 if isinstance(v, dict) and "$in" in v:
                     if doc.get(k) not in v["$in"]:
+                        match = False
+                elif isinstance(v, dict) and "$nin" in v:
+                    if doc.get(k) in v["$nin"]:
                         match = False
                 elif doc.get(k) != v:
                     match = False
@@ -298,6 +302,84 @@ class DemoSetupTests(unittest.TestCase):
         self.assertEqual(plan1["counts"]["sample_tickets"], 12)
         self.assertEqual(plan1["counts"]["source_documents"], 30)
         self.assertNotIn("pass", json.dumps(plan1))
+
+    def test_replace_chunks_safely_keeps_old_data_when_insert_fails(self):
+        col = FakeDatabase()["doc_vectors"]
+        col.docs = [
+            {"_id": "old1", "tenant_id": "t1", "doc_id": "A", "text": "old"},
+            {"_id": "other", "tenant_id": "t2", "doc_id": "A", "text": "other tenant"},
+        ]
+        scope = {"tenant_id": "t1", "doc_id": {"$in": ["A"]}}
+        new_docs = [{"tenant_id": "t1", "doc_id": "A", "text": "new"}]
+
+        def boom(docs):
+            raise RuntimeError("insert failed")
+
+        col.insert_many = boom
+        with self.assertRaises(RuntimeError):
+            replace_chunks_safely(col, scope, new_docs)
+        self.assertEqual([d["_id"] for d in col.docs], ["old1", "other"])
+
+    def test_replace_chunks_safely_keeps_old_data_on_short_insert_count(self):
+        col = FakeDatabase()["doc_vectors"]
+        col.docs = [{"_id": "old1", "tenant_id": "t1", "doc_id": "A", "text": "old"}]
+        scope = {"tenant_id": "t1", "doc_id": {"$in": ["A"]}}
+        new_docs = [
+            {"tenant_id": "t1", "doc_id": "A", "text": "n1"},
+            {"tenant_id": "t1", "doc_id": "A", "text": "n2"},
+        ]
+        real_insert = col.insert_many
+
+        def short(docs):
+            real_insert(docs)
+            return Mock(inserted_ids=[0])
+
+        col.insert_many = short
+        with self.assertRaises(DemoSeedError):
+            replace_chunks_safely(col, scope, new_docs)
+        self.assertEqual([d["_id"] for d in col.docs], ["old1"])
+
+    def test_replace_chunks_safely_replaces_only_scope_after_success(self):
+        col = FakeDatabase()["doc_vectors"]
+        col.docs = [
+            {"_id": "old1", "tenant_id": "t1", "doc_id": "A", "text": "old"},
+            {"_id": "keep", "tenant_id": "t1", "doc_id": "USER_UPLOAD", "text": "keep"},
+            {"_id": "other", "tenant_id": "t2", "doc_id": "A", "text": "other"},
+        ]
+        scope = {"tenant_id": "t1", "doc_id": {"$in": ["A"]}}
+        count = replace_chunks_safely(
+            col, scope, [{"tenant_id": "t1", "doc_id": "A", "text": "new"}]
+        )
+        self.assertEqual(count, 1)
+        texts = sorted(d["text"] for d in col.docs)
+        self.assertEqual(texts, ["keep", "new", "other"])
+
+    def test_execute_demo_seed_failed_insert_leaves_existing_chunks(self):
+        fake_db = FakeDatabase("capstone_demo")
+        kwargs = dict(
+            app_mode="preset_training",
+            mongo_uri="mongodb://demo:secret@127.0.0.1:27018/?directConnection=true",
+            training_db_name="capstone_demo",
+            db_override=fake_db,
+            ingestor_factory=lambda **kw: FakeIngestor(num_dimensions=384),
+        )
+        execute_demo_seed(**kwargs)
+        vectors = fake_db["doc_vectors"]
+        before = [d["_id"] for d in vectors.docs]
+        self.assertEqual(len(before), 30)
+
+        # Force a re-ingest by removing one expected doc of one tenant, then fail the insert.
+        victim = vectors.docs[0]
+        vectors.docs = [d for d in vectors.docs if d is not victim]
+        remaining = [d["_id"] for d in vectors.docs]
+
+        def boom(docs):
+            raise RuntimeError("insert failed")
+
+        vectors.insert_many = boom
+        with self.assertRaises(RuntimeError):
+            execute_demo_seed(**kwargs)
+        self.assertEqual([d["_id"] for d in vectors.docs], remaining)
 
     def test_execute_demo_seed_idempotence_and_preserves_user_edits(self):
         fake_db = FakeDatabase("capstone_demo")

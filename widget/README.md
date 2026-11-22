@@ -20,7 +20,7 @@ Visitors see the assistant's reply, never retrieved chunks or scores.
 The script can come from your gateway (`/widget.js`) or a CDN. Pin an exact version on a CDN:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@ownhelp/widget@0.1.0/dist/widget.js"
+<script src="https://cdn.jsdelivr.net/npm/@ownhelp/widget@0.1.1/dist/widget.js"
         data-tenant-id="your_tenant"
         data-api-url="https://support.example.com"
         defer></script>
@@ -38,7 +38,7 @@ uses the origin the script was loaded from.
 | `data-position` | no | `right` | `left` or `right`. |
 | `data-accent-color` | no | `#1f6feb` | Any CSS colour. |
 
-The widget renders inside a shadow root, so your page's CSS cannot affect it.
+The widget renders inside a shadow root, so your page's CSS cannot affect it. The React component below is isolated the same way. Theme it with `accentColor` or the `--cw-*` custom properties, which inherit through the shadow boundary; page selectors cannot restyle it.
 
 ## Install: React component
 
@@ -95,7 +95,10 @@ npm run build   # dist/widget.js (script tag) and dist/lib/index.js (React impor
 
 In the mock, a message containing `human` returns follow-up metadata, `nostream` the JSON fallback,
 and `ratelimit`, `unknown`, `error`, `cutoff` and `slow` exercise failures (see the header of
-`mock/mock_gateway.js`). The mock saves nothing; use fictional data.
+`mock/mock_gateway.js`). The mock saves nothing; use fictional data. It enforces the real gateway's
+input rules (session id format, size caps, origin allowlist). By default it allows the Vite dev and
+preview origins on localhost and 127.0.0.1; set `MOCK_ALLOWED_ORIGINS` (comma separated) to serve the
+host page from elsewhere.
 
 ## Publish checklist
 

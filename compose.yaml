@@ -138,6 +138,9 @@ services:
       CHAT_BACKEND_URL: http://chat-service:8100
       CHAT_FOLLOW_UP_SECRET: ${CHAT_FOLLOW_UP_SECRET:?Set CHAT_FOLLOW_UP_SECRET}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3002,http://127.0.0.1:3002}
+      # Number of reverse proxies in front of the gateway (1 behind a Cloudflare Tunnel) so
+      # rate limits see the real client IP. Empty leaves Express's trust proxy off.
+      TRUST_PROXY: ${TRUST_PROXY:-}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-ownhelp_session}
       UPLOAD_STAGING_DIR: /tmp/ownhelp_uploads
       PYTHON_EXECUTABLE: /opt/venv/bin/python

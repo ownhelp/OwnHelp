@@ -32,19 +32,23 @@ const BY_CODE = {
     origin_not_allowed: { message: "The support chat isn't available on this site.", retryable: false },
 };
 
+function waitText(error) {
+    const seconds = Number(error && error.retryAfterSec);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+        return "a moment";
+    }
+    return seconds > 90 ? `${Math.ceil(seconds / 60)} minutes` : `${Math.ceil(seconds)} seconds`;
+}
+
 // Maps a ChatError to { message, retryable }. Unknown codes fall back on the HTTP status
 // (5xx retryable, 4xx not), and `rate_limited` builds its wait time from `Retry-After`.
 function describe(error) {
     const code = error && error.code;
     if (code === "rate_limited") {
-        const seconds = Number(error.retryAfterSec);
-        const wait =
-            Number.isFinite(seconds) && seconds > 0
-                ? seconds > 90
-                    ? `${Math.ceil(seconds / 60)} minutes`
-                    : `${Math.ceil(seconds)} seconds`
-                : "a moment";
-        return { message: `You're sending messages too quickly. Please wait ${wait} and try again.`, retryable: true };
+        return {
+            message: `You're sending messages too quickly. Please wait ${waitText(error)} and try again.`,
+            retryable: true,
+        };
     }
     if (code && BY_CODE[code]) {
         return BY_CODE[code];
@@ -57,6 +61,40 @@ function describe(error) {
         return { message: GENERIC, retryable: false };
     }
     return { message: GENERIC, retryable: true };
+}
+
+const CONTACT_FALLBACK = "Your details could not be saved. Please try again or contact the business directly.";
+const CONTACT_DIRECT = "contact the business directly";
+
+const CONTACT_BY_CODE = {
+    invalid_request: "Please check your name and email address and try again.",
+    origin_not_allowed: `Email follow-up isn't available on this site. Please ${CONTACT_DIRECT}.`,
+    unknown_tenant: `Email follow-up isn't available on this site. Please ${CONTACT_DIRECT}.`,
+    invalid_follow_up: `This follow-up form has expired. Please send your message again to get a new one, or ${CONTACT_DIRECT}.`,
+    contact_already_submitted: `Different contact details were already saved for this conversation. Please ${CONTACT_DIRECT} to change them.`,
+    service_unavailable: "We couldn't save your details right now. Please try again shortly or contact the business directly.",
+    network_error: "We couldn't reach the support service. Please check your connection and try again.",
+    timeout: "Saving your details took too long. Please try again.",
+};
+
+/**
+ * Safe, visitor-facing text for a failed contact-form save (POST /api/chat/contact). Never echoes
+ * server text. `aborted` is treated as a timeout because the widget only aborts a save on its
+ * own 30 second limit (a visitor-initiated reset ignores the result before it is shown).
+ */
+export function contactMessage(error) {
+    const code = error && error.code === "aborted" ? "timeout" : error && error.code;
+    if (code === "rate_limited") {
+        return `Too many attempts. Please wait ${waitText(error)} and try again.`;
+    }
+    if (code && Object.hasOwn(CONTACT_BY_CODE, code)) {
+        return CONTACT_BY_CODE[code];
+    }
+    const status = Number(error && error.status);
+    if (status >= 500) {
+        return CONTACT_BY_CODE.service_unavailable;
+    }
+    return CONTACT_FALLBACK;
 }
 
 /** Safe, visitor-facing text for any failure. */

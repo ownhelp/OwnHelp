@@ -205,13 +205,9 @@ services:
       - demo_net
 
   # Optional bundled Ollama, only started with the "ollama" profile (`setup.sh setup --with-ollama`).
-  # CPU-only as written; add GPU access yourself if wanted. Download a model with `setup.sh pull-model`.
-  # TODO(sandbox-gpu): this service has no GPU reservation, so it runs on CPU only. Add an opt-in
-  # `--with-ollama-gpu` flag in scripts/setup.sh that enables a GPU variant (a compose profile or
-  # override carrying the same deploy.resources.reservations.devices block as the standard
-  # compose.yaml: driver nvidia, count all, capabilities [gpu]). It must stay opt-in, because an
-  # unconditional reservation makes the service fail to start on machines without the NVIDIA
-  # Container Toolkit. Fix TODO(setup-args) in setup.sh at the same time.
+  # CPU-only as written. For an NVIDIA GPU use `setup.sh setup --with-ollama-gpu`, which layers
+  # compose.gpu.yaml on top (kept separate so CPU-only hosts do not fail on the reservation).
+  # Download a model with `setup.sh pull-model`.
   ollama-demo:
     image: ollama/ollama:0.5.7
     profiles:

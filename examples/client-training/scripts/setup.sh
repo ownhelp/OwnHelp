@@ -3,11 +3,11 @@
 # "ownhelp_client_training"). It is never started by the standard application.
 #
 # Usage (from the repository root):
-#   bash examples/client-training/scripts/setup.sh [ACTION] [--with-ollama] [extra compose args]
+#   bash examples/client-training/scripts/setup.sh [ACTION] [--with-ollama] [--with-ollama-gpu] [extra compose args]
 #
-# ACTION is the first argument and defaults to "setup" only when no arguments are given.
-# Options come after it, so write `setup.sh setup --with-ollama`, not `setup.sh --with-ollama`
-# (a leading option is read as an unknown action and prints the usage line).
+# ACTION is the first non-option argument and defaults to "setup". The --with-ollama* options
+# may come before or after it, so `setup.sh --with-ollama` and `setup.sh setup --with-ollama`
+# are equivalent. An unknown option or action prints the usage text.
 #
 # ACTION:
 #   setup       Build the gateway and dashboard images, start the stack, wait until
@@ -28,6 +28,10 @@
 #                  Compose profile. Pass it on every invocation that should include it.
 #                  The profile is always enabled for stop/reset/status/logs/pull-model so
 #                  a bundled Ollama is never left running by accident.
+#   --with-ollama-gpu  Implies --with-ollama and also layers compose.gpu.yaml, which reserves
+#                  all NVIDIA GPUs for ollama-demo. Requires an NVIDIA driver and the NVIDIA
+#                  Container Toolkit on the host; without them the container fails to start,
+#                  so use plain --with-ollama on CPU-only machines.
 #
 # Environment and files:
 #   Reads/creates examples/client-training/.env.local (gitignored). On first run it is
@@ -47,6 +51,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 DEMO_ROOT="${PROJECT_ROOT}/examples/client-training"
 COMPOSE_FILE="${DEMO_ROOT}/compose.yaml"
+COMPOSE_FILE_ARGS=(-f "${COMPOSE_FILE}")
 COMPOSE_PROJECT="ownhelp_client_training"
 ENV_FILE="${DEMO_ROOT}/.env.local"
 SUMMARY_FILE="${DEMO_ROOT}/logs/seed_summary.json"
@@ -127,7 +132,7 @@ EOF
 }
 
 compose_cmd() {
-    docker compose --env-file "${ENV_FILE}" -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" "$@"
+    docker compose --env-file "${ENV_FILE}" -p "${COMPOSE_PROJECT}" "${COMPOSE_FILE_ARGS[@]}" "$@"
 }
 
 # Poll until the gateway reports vector_index_ready and the dashboard login page answers.
@@ -217,27 +222,54 @@ PY
     echo "======================================================================"
 }
 
-# TODO(setup-args): the first argument is always taken as the action, so `setup.sh --with-ollama`
-# fails with the usage line (it must be `setup.sh setup --with-ollama`). Fix: if $1 starts with
-# "--", treat the action as "setup" and keep $1 in the argument list.
-ACTION="${1:-setup}"
-shift || true
-
-ensure_docker
-ensure_env_file
+usage() {
+    echo "Usage: bash examples/client-training/scripts/setup.sh [setup|start|stop|restart|status|logs|pull-model|reset [--rebuild]] [--with-ollama] [--with-ollama-gpu]" >&2
+    echo "  Options may come before or after the action (default action: setup)." >&2
+    echo "  --with-ollama      run the bundled Ollama container (CPU)" >&2
+    echo "  --with-ollama-gpu  bundled Ollama with an NVIDIA GPU reservation (needs the NVIDIA Container Toolkit; implies --with-ollama)" >&2
+}
 
 # --with-ollama runs a bundled, project-scoped Ollama container instead of the host Ollama,
 # so the whole sandbox lives inside the ownhelp_client_training project.
+# --with-ollama-gpu additionally layers compose.gpu.yaml (NVIDIA reservation) over it.
+# These two options may appear anywhere. The first other argument is the action; any later
+# arguments are passed through to the action (e.g. `logs -f gateway-demo`, `reset --rebuild`).
+ACTION=""
 WITH_OLLAMA=0
+WITH_OLLAMA_GPU=0
 REMAINING_ARGS=()
 for arg in "$@"; do
-    if [ "${arg}" = "--with-ollama" ]; then
-        WITH_OLLAMA=1
-    else
-        REMAINING_ARGS+=("${arg}")
-    fi
+    case "${arg}" in
+        --with-ollama)
+            WITH_OLLAMA=1
+            ;;
+        --with-ollama-gpu)
+            WITH_OLLAMA=1
+            WITH_OLLAMA_GPU=1
+            ;;
+        *)
+            if [ -z "${ACTION}" ]; then
+                if [[ "${arg}" == -* ]]; then
+                    echo "Unknown option: ${arg}" >&2
+                    usage
+                    exit 1
+                fi
+                ACTION="${arg}"
+            else
+                REMAINING_ARGS+=("${arg}")
+            fi
+            ;;
+    esac
 done
+ACTION="${ACTION:-setup}"
 set -- "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
+
+if [ "${WITH_OLLAMA_GPU}" -eq 1 ]; then
+    COMPOSE_FILE_ARGS+=(-f "${DEMO_ROOT}/compose.gpu.yaml")
+fi
+
+ensure_docker
+ensure_env_file
 
 if [ "${WITH_OLLAMA}" -eq 1 ]; then
     export OLLAMA_HOST="http://ollama-demo:11434"
@@ -299,7 +331,8 @@ case "${ACTION}" in
         fi
         ;;
     *)
-        echo "Usage: bash examples/client-training/scripts/setup.sh [setup|start|stop|restart|status|logs|pull-model|reset [--rebuild]] [--with-ollama]" >&2
+        echo "Unknown action: ${ACTION}" >&2
+        usage
         exit 1
         ;;
 esac

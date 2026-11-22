@@ -25,9 +25,13 @@ const { isPresetTenantId, isValidTenantId } = require("../config/presets");
 const { getChatConfig } = require("../chat/config");
 const { resolveAllowedOrigins, isOriginAllowed } = require("../chat/origins");
 const { getChatBackend } = require("../chat/backend");
-// TODO(gateway-cleanup): merge these two requires of ../chat/escalation into one.
-const { buildEscalationTicket, isEscalation, saveEscalationTicket } = require("../chat/escalation");
-const { withTimeout, SAVE_TIMEOUT_MS } = require("../chat/escalation");
+const {
+    buildEscalationTicket,
+    isEscalation,
+    saveEscalationTicket,
+    withTimeout,
+    SAVE_TIMEOUT_MS,
+} = require("../chat/escalation");
 const { SessionHistory } = require("../chat/sessionHistory");
 const { SlidingWindowLimiter } = require("../middleware/rateLimit");
 

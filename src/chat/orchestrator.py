@@ -2,14 +2,15 @@
 
 ``ChatOrchestrator.stream`` is a generator of plain event dicts consumed by the Node gateway
 (see ``src/chat/server.py``). It reuses ``RAGRetriever`` (tenant pre-filtered ``$vectorSearch``)
-and the Ollama client from ``SupportInferenceClient``. Visitor answer text is buffered until
-schema validation and the live product-capability safeguard complete.
+and the Ollama client from ``SupportInferenceClient``. Answer text streams as the model writes it,
+except the last ``GuardedAnswerStream.HOLD_BACK`` characters, which wait until schema validation and
+the live product-capability safeguard complete (streamed text cannot be retracted).
 
 Event sequence for a successful reply::
 
     {"type": "sources", "sources": [{"doc_id", "section", "score"}, ...]}
     {"type": "progress"}                       (content-free cancellation heartbeat)
-    {"type": "token", "text": "..."}            (one validated answer)
+    {"type": "token", "text": "..."}            (repeated; the last one follows validation)
     {"type": "done", "action": "answer" | "escalate", "confidence": 0.9, "cited_sources": [...]}
 
 ``action``, ``confidence`` and ``cited_sources`` are consumed by the gateway to open a human-review
@@ -20,9 +21,10 @@ A failure is reported as ``{"type": "error", "code": ..., "message": ...}`` and 
 One turn, in order: (1) retrieve tenant-scoped chunks and drop those below the tenant's
 ``similarity_threshold``; (2) assemble the prompt: policy + tenant tone as the system message, then
 the question, recent history, retrieved context and verified business contact as the user message;
-(3) generate with Ollama under the ``SupportResponse`` JSON schema, buffering the raw JSON; (4) validate
-it and run the handoff-promise safeguard, which rewrites unsupported "someone will contact you"
-answers into an escalation; (5) emit the answer and the internal action. Escalation itself (opening a
+(3) generate with Ollama under the ``SupportResponse`` JSON schema, streaming the ``answer`` field
+through ``GuardedAnswerStream``; (4) validate the full JSON and run the handoff-promise safeguard,
+which rewrites unsupported "someone will contact you" answers into an escalation (appended after any
+harmless text already shown); (5) emit the held-back tail and the internal action. Escalation itself (opening a
 ticket) is done by the gateway from the ``done`` event, not here.
 Callers: ``src/chat/server.py`` (``orchestrator.stream``). Inputs: ``ChatServiceRequest``.
 """
@@ -35,6 +37,7 @@ from typing import Iterator, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from src.chat.answer_stream import GuardedAnswerStream
 from src.inference.client import SupportInferenceClient
 from src.inference.schema import SupportResponse
 from src.inference.policy import build_policy_prompt, requires_handoff_safeguard, SAFE_FOLLOWUP_ANSWER
@@ -155,6 +158,7 @@ class ChatOrchestrator:
             {"role": "user", "content": self.client.build_user_prompt(request.query, context, history) + contact_text},
         ]
         raw = []
+        guard = GuardedAnswerStream(requires_handoff_safeguard)
         stream = None
         last_progress = 0.0
         try:
@@ -171,34 +175,36 @@ class ChatOrchestrator:
                     if not piece:
                         continue
                     raw.append(piece)
+                    released = guard.feed(piece)
                     now = time.monotonic()
-                    if now - last_progress >= 0.5:
-                        # No answer text: writes let the HTTP server detect an aborted visitor
-                        # and close this generator/Ollama stream during buffered generation.
+                    if released:
+                        yield {"type": "token", "text": released}
+                        last_progress = now
+                    elif now - last_progress >= 0.5:
+                        # No answer text yet: writes let the HTTP server detect an aborted visitor
+                        # and close this generator/Ollama stream while the model is still working.
                         yield {"type": "progress"}
                         last_progress = now
             response = SupportResponse.model_validate_json("".join(raw))
             raw_action = response.action
             reason = "none"
+            # Everything but the guard's held-back tail may already be on the visitor's screen and
+            # cannot be retracted; the tail is sent (or replaced) only after this authoritative check.
             if requires_handoff_safeguard(response.answer):
                 reason = "unsupported_handoff_promise"
                 response = SupportResponse(
                     answer=SAFE_FOLLOWUP_ANSWER, action="escalate", confidence=0.0, cited_sources=[]
                 )
+                # Text already shown is harmless by construction (it precedes any matched promise);
+                # the safe answer follows it as a new paragraph.
+                remaining = ("\n\n" if guard.released_text else "") + SAFE_FOLLOWUP_ANSWER
+            else:
+                remaining = guard.remainder(response.answer)
             log_result = logger.warning if reason != "none" else logger.info
             log_result("Support response raw_action=%s effective_action=%s safeguard=%s",
                        raw_action, response.action, reason)
-            # Buffer until validation and capability checks finish: unsafe text cannot be retracted.
-            # TODO(streaming): Current: the whole structured-JSON reply is buffered, validated and sent
-            # as ONE token event, so visitors wait for full generation. Target: emit token events as the
-            # model produces them, feeding raw chunks to src/chat/answer_stream.AnswerStreamer. Hard
-            # because the model returns structured JSON: the answer field must be extracted
-            # incrementally while the full reply is still validated, and the handoff safeguard and the
-            # escalate decision (the ``action`` field, which can arrive after the answer) must not leak
-            # early, since already-sent text cannot be retracted. The gateway
-            # (gateway/src/routes/chat.js onToken -> SSE "token") and the widget
-            # (widget/src/lib/chatClient.js "token" handler) already accept many token events.
-            yield {"type": "token", "text": response.answer}
+            if remaining:
+                yield {"type": "token", "text": remaining}
             # action / confidence / cited_sources are for the gateway only (human escalation review);
             # the gateway never forwards them to the visitor.
             yield {

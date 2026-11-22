@@ -14,7 +14,8 @@ The dashboard is one part of the stack, alongside the Express gateway (`gateway/
   * A read-only viewer shows the raw stored content of a document.
 * **Chunk and embedding explorer (`/`)**
   * Paged list (50 per page) of the tenant's stored chunks, filterable by document and by text/section search.
-  * Each chunk shows an estimated token count against the 512-token embedding limit. Manual chunk editing is not implemented.
+  * Each chunk shows an estimated token count against the 512-token embedding limit.
+  * Chunks can be edited by hand (Edit button on a row or in the chunk modal). Saving re-embeds the new text with the same model used at ingestion and writes the text and vector together, so a failed save leaves the chunk unchanged. Text over the embedding token limit is rejected, not truncated. Chunk deletion is not implemented.
 * **Runtime configuration (`/profile`)**
   * Agent tone (presets or free text), Business Instructions (the tenant's `system_prompt`), and sliders for temperature, max context chunks and similarity threshold.
   * The application-managed core assistant policy is displayed read-only; the dashboard never writes it back.

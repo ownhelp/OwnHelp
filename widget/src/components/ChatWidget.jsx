@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { streamChat, submitContact } from "../lib/chatClient.js";
 import { getSessionId, newSessionId } from "../lib/session.js";
-import { isRetryable, visitorMessage } from "../lib/messages.js";
+import { contactMessage, isRetryable, visitorMessage } from "../lib/messages.js";
 import { contactLinks, createConversationScope } from "../lib/followUp.js";
 import { WIDGET_CSS } from "../styles.js";
 
@@ -214,13 +214,11 @@ export default function ChatWidget({
                 setContactName("");
                 setContactEmail("");
             }
-        } catch {
+        } catch (error) {
             if (request.isCurrent()) {
                 setContactStatus("error");
-                // TODO(widget-contact-errors): every failure shows this one message. Map the
-                // contact error codes (invalid_follow_up, contact_already_submitted, rate_limited)
-                // to specific text in lib/messages.js, as streamChat errors already are.
-                setContactError("Your details could not be saved. Please try again or contact the business directly.");
+                // Never show the server's own error text: a fixed, safe message per code.
+                setContactError(contactMessage(error));
             }
         } finally {
             clearTimeout(timeout);

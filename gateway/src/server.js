@@ -176,9 +176,6 @@ function createApp() {
     );
 
     app.use(express.json({ limit: "2mb" }));
-    // TODO(gateway-cleanup): "json spaces" is already set at the top of createApp; remove this
-    // duplicate.
-    app.set("json spaces", 4);
 
     // Validate Origin / CSRF on state-changing requests
     app.use("/api", validateCsrfOrigin);

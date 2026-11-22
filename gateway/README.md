@@ -107,6 +107,7 @@ login throttling.
 | `GET /api/tenants/:tenantId/documents` | session | none | Documents with chunk counts. |
 | `GET /api/tenants/:tenantId/documents/:docId` | session | none | One document's text and chunks. |
 | `GET /api/tenants/:tenantId/chunks` | session | none | Paginated vector chunks (embedding vectors omitted). |
+| `PUT /api/tenants/:tenantId/chunks/:docId/:chunkIndex` | session | at most 2 edits at once, then `429` | Replace one chunk's text (1 to 8000 characters, body `{ "text": "..." }`). Re-embeds it with the ingestion model in `scripts/reembed_chunk.py` and updates text and embedding in one write; any failure leaves the chunk unchanged. `404` if the chunk is not the session tenant's, `400` for invalid input or text over the embedding token limit. |
 | `GET /api/tenants/:tenantId/tickets` | session | none | Tickets, optional `status` and `search`. |
 | `POST /api/tickets`, `POST /api/tenants/:tenantId/tickets` | session | none | Create a ticket. |
 | `PATCH /api/tickets/:ticketId` | session | none | Update status, notes, contact or summary. |
