@@ -24,6 +24,8 @@ export default defineConfig(({ mode }) => {
 
     return {
         plugins: [react()],
+        // The IIFE is loaded straight from a <script> tag with no bundler downstream, so React's
+        // `process.env.NODE_ENV` checks must be resolved here (and `process` does not exist in a browser).
         define: {
             "process.env.NODE_ENV": JSON.stringify("production"),
         },

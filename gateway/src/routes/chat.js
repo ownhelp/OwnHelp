@@ -10,6 +10,7 @@
  *
  * Routes (all anonymous; no cookie is read or set):
  *   OPTIONS /api/chat, /api/chat/contact  204 preflight
+ *   GET     /api/chat?tenant_id=  { record_conversations } so the widget can show its recording notice
  *   POST    /api/chat          SSE stream (Accept: text/event-stream) or one JSON body; 16 KB cap
  *   POST    /api/chat/contact  saves a visitor name/email on an escalated ticket; 8 KB cap
  *
@@ -32,6 +33,7 @@ const {
     withTimeout,
     SAVE_TIMEOUT_MS,
 } = require("../chat/escalation");
+const { shouldRecordConversation, buildConversationLogEntry, saveConversationLog } = require("../chat/conversationLog");
 const { SessionHistory } = require("../chat/sessionHistory");
 const { SlidingWindowLimiter } = require("../middleware/rateLimit");
 
@@ -95,6 +97,7 @@ function limitByIp(req, res, next) {
     return next();
 }
 
+// Clamps an admin-edited setting into [min, max]; a missing or non-numeric value takes `fallback`.
 function numberOr(value, fallback, min, max) {
     const number = Number(value);
     if (value === undefined || value === null || Number.isNaN(number)) return fallback;
@@ -107,6 +110,7 @@ function buildAgentConfig(raw) {
     const text = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");
     return {
         system_prompt: text(config.system_prompt, 4000),
+        core_policy: text(config.core_policy, 8000),
         agent_tone: text(config.agent_tone, 200),
         temperature: numberOr(config.temperature, 0.2, 0, 1),
         max_context_chunks: Math.round(numberOr(config.max_context_chunks, 4, 1, 8)),
@@ -125,7 +129,17 @@ async function loadTenant(tenantId) {
     const businesses = await getBusinessesCollection();
     return businesses.findOne(
         { tenant_id: tenantId },
-        { projection: { _id: 0, tenant_id: 1, agent_config: 1, widget_config: 1, contact_email: 1, contact_phone: 1 } }
+        {
+            projection: {
+                _id: 0,
+                tenant_id: 1,
+                agent_config: 1,
+                widget_config: 1,
+                contact_email: 1,
+                contact_phone: 1,
+                record_conversations: 1,
+            },
+        }
     );
 }
 
@@ -150,11 +164,14 @@ const UNAVAILABLE_MESSAGE = "The support assistant is temporarily unavailable. P
 const GENERATION_FAILED_MESSAGE = "The assistant ran into a problem.";
 const INTERRUPTED_MESSAGE = "The connection was interrupted before the reply finished.";
 
+// Sentinel for the pre-stream grace-window race in handleChat: distinguishes "timer fired" from a real iterator result.
 const STILL_WAITING = Symbol("still waiting for the first token");
 
+// Appended to the reply when an escalation ticket could not be saved, so no follow-up form is offered.
 const FOLLOW_UP_UNAVAILABLE = "The email follow-up form is temporarily unavailable. Please contact the business directly.";
 
-const ESCALATED_WITHOUT_REPLY ="(The assistant escalated without a reply.)";
+// Stored in history when the model escalated with an empty answer, so the turn is still remembered.
+const ESCALATED_WITHOUT_REPLY = "(The assistant escalated without a reply.)";
 
 /**
  * Remembers a finished exchange for follow-up questions and, when the model escalated it, saves the
@@ -181,12 +198,15 @@ async function recordTurn({ tenantId, sessionId, message, answer, done, sources,
         return ticket.ticket_id;
     } catch (error) {
         console.error("[POST /api/chat] Could not save escalation ticket:", error && error.name);
+        // The visitor was shown FOLLOW_UP_UNAVAILABLE, so keep the remembered reply consistent with
+        // it (capped at the 2000-character history limit) for the model's next turn.
         rememberedReply.content = `${text.slice(0, 2000 - FOLLOW_UP_UNAVAILABLE.length - 2)}\n\n${FOLLOW_UP_UNAVAILABLE}`;
     }
 }
 
 /**
- * Drives the backend iterator. Returns { completed, timedOut } and reports through `sink`.
+ * Drives the backend iterator. Returns { completed } (true only after a `done` event) and reports
+ * through `sink`; the caller decides whether a failure was caused by the deadline (`timedOut`).
  * `first` is the already-pulled first iterator result (used to decide HTTP status before streaming).
  */
 async function consumeEvents(iterator, first, sink, isGone) {
@@ -277,6 +297,8 @@ async function handleChat(req, res) {
     }
 
     const wantsStream = String(req.get("accept") || "").includes("text/event-stream");
+    const startedAt = Date.now();
+    const recordThisTurn = shouldRecordConversation(tenant, body);
     const payload = {
         tenant_id: tenant.tenant_id,
         query: message,
@@ -376,6 +398,22 @@ async function handleChat(req, res) {
         });
 
         const persistTurn = async (onNotice = () => {}) => {
+            if (recordThisTurn) {
+                // Opt-in research log: awaited with its own timeout, never throws, and records the
+                // model's answer before any follow-up notice is appended to it.
+                await saveConversationLog(
+                    buildConversationLogEntry({
+                        tenantId: tenant.tenant_id,
+                        sessionId,
+                        message,
+                        answer,
+                        done: doneEvent,
+                        sources,
+                        agentConfig: payload.agent_config,
+                        latencyMs: Date.now() - startedAt,
+                    })
+                );
+            }
             const ticketId = await recordTurn(turn());
             if (!ticketId) {
                 if (isEscalation(doneEvent)) {
@@ -460,8 +498,8 @@ async function handleChat(req, res) {
                         sendEvent("token", { text });
                     },
                     onDone: (event) => {
+                        // The `done` event is sent after persistTurn(), once the follow-up outcome is known.
                         doneEvent = event;
-
                     },
                     onError: (code, text) => sendEvent("error", failure(code, text)),
                 },
@@ -527,6 +565,35 @@ async function handleContact(req, res) {
     }
 }
 
+/**
+ * GET /api/chat?tenant_id=... Auth: none. Tells the widget whether this business records chats, so
+ * it can show the notice before the first message. Same tenant lookup, mode rules and origin check
+ * as POST. Response 200 { record_conversations: boolean }; 400 invalid_request; 403
+ * origin_not_allowed; 404 unknown_tenant. Lives on /api/chat because that path is already public
+ * on the tunnel (no extra route to expose).
+ */
+async function handleChatSettings(req, res) {
+    const tenantId = req.query.tenant_id;
+    if (typeof tenantId !== "string" || !tenantId.trim()) {
+        return sendError(res, 400, "invalid_request", "tenant_id is required");
+    }
+    let tenant;
+    try {
+        tenant = await loadTenant(tenantId.trim());
+    } catch (error) {
+        console.error("[GET /api/chat] Tenant lookup failed:", error.name);
+        return sendError(res, 503, "service_unavailable", UNAVAILABLE_MESSAGE);
+    }
+    if (!tenant) {
+        return sendError(res, 404, "unknown_tenant", "No support assistant is configured for this site.");
+    }
+    const config = getChatConfig(process.env);
+    if (!isOriginAllowed(req.headers.origin, resolveAllowedOrigins(tenant, config.defaultAllowedOrigins))) {
+        return sendError(res, 403, "origin_not_allowed", "This site is not allowed to use this support assistant.");
+    }
+    return res.json({ record_conversations: tenant.record_conversations === true });
+}
+
 // Per-route body parsers (small caps) are attached here instead of globally because this router is
 // mounted before server.js's 2 MB express.json, and anonymous callers must get the smaller limit.
 const router = express.Router();
@@ -539,9 +606,12 @@ router.post("/contact", limitByIp, express.json({ limit: "8kb" }), (req, res, ne
 router.post("/", limitByIp, express.json({ limit: "16kb" }), (req, res, next) => {
     handleChat(req, res).catch(next);
 });
+router.get("/", limitByIp, (req, res, next) => {
+    handleChatSettings(req, res).catch(next);
+});
 router.all("/", (req, res) => {
-    res.setHeader("Allow", "POST, OPTIONS");
-    return sendError(res, 405, "method_not_allowed", "Use POST /api/chat.");
+    res.setHeader("Allow", "GET, POST, OPTIONS");
+    return sendError(res, 405, "method_not_allowed", "Use POST or GET /api/chat.");
 });
 router.use((req, res) => sendError(res, 404, "not_found", "Not found."));
 // eslint-disable-next-line no-unused-vars
@@ -556,4 +626,4 @@ router.use((error, req, res, next) => {
     return sendError(res, 500, "internal_error", "Something went wrong.");
 });
 
-module.exports = { router, resetChatState, buildAgentConfig, MAX_MESSAGE_LENGTH };
+module.exports = { router, resetChatState, buildAgentConfig };

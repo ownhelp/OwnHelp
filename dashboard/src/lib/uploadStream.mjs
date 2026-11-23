@@ -5,8 +5,6 @@
  * so node:test can exercise it directly.
  */
 
-export const UPLOAD_STAGES = ["uploading", "parsing", "embedding", "writing"];
-
 /** Splits arbitrary text chunks into complete JSON lines; a partial last line waits for more text. */
 export function createNdjsonLineBuffer() {
     let pending = "";
@@ -55,6 +53,7 @@ export async function readUploadStream(reader, onStage) {
             if (event.event === "stage" && typeof event.stage === "string") {
                 if (typeof onStage === "function") onStage(event.stage);
             } else if (event.event === "done") {
+                // Drop the protocol's `event` marker so callers get the plain ingestion summary.
                 const { event: _ignored, ...rest } = event;
                 summary = rest;
             } else if (event.event === "error") {

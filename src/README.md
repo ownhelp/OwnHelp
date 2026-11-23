@@ -7,10 +7,11 @@ Reusable logic for retrieval, ingestion, chat orchestration, local inference and
 | Package | Purpose | Key modules |
 | --- | --- | --- |
 | `rag/` | Chunk and embed documents, manage the Atlas vector index, retrieve tenant-scoped context. | `ingestor.py` (writes `doc_vectors`), `retriever.py` (`$vectorSearch`), `vector_index.py` (index definition and readiness), `table_parser.py` (table linearization), `db_config.py` (training database name) |
-| `chat/` | Internal HTTP service and the logic for one visitor turn. | `server.py` (`POST /v1/chat`, `GET /health`), `orchestrator.py` (retrieve, prompt, generate, validate), `answer_stream.py` (incremental JSON answer extractor, currently exercised only by tests) |
+| `chat/` | Internal HTTP service and the logic for one visitor turn. | `server.py` (`POST /v1/chat`, `GET /health`), `orchestrator.py` (retrieve, prompt, generate, validate), `answer_stream.py` (incremental JSON answer extractor and hold-back guard used by the orchestrator) |
 | `inference/` | Talk to Ollama and define what a model reply must look like. | `client.py` (Ollama chat calls), `schema.py` (`SupportResponse`), `policy.py` and `system_policy.json` (core system prompt, handoff safeguard), `serving_metadata.py` (model digest and settings capture) |
 | `documents/` | Structured, lossless parsing of `.md`, `.txt` and `.json` sources into whole blocks with locators. | `parser.py`, `integration.py` (chunks with provenance fields) |
 | `deployment/` | Create the private env file for the Docker Compose stack. | `config.py` (used by `scripts/setup_stack.py`) |
+| `analytics/` | Read-only export and summary of recorded chat turns (`conversation_logs`). | `conversation_export.py` (used by `scripts/export_conversations.py`) |
 | `demo_setup/` | Seed an isolated local MongoDB with preset demo tenants, tickets and vectors. | `seeder.py` (target allow-list, idempotent seeding, index readiness) |
 
 ## Data flow for one chat turn
@@ -26,12 +27,12 @@ widget  --POST /api/chat-->  gateway (Node)  --POST /v1/chat-->  chat/server.py
    4. Ollama generates JSON constrained to inference/schema.py (SupportResponse)
    5. validate JSON, run the handoff safeguard, emit events
                                                                       |
-   NDJSON events: sources, progress, token (the whole answer), done (action, confidence, cited_sources)
+   NDJSON events: sources, progress, token (repeated; the last follows validation), done (action, confidence, cited_sources)
                                                                       |
 gateway converts events to SSE or JSON for the widget, opens a human-review ticket when action is "escalate"
 ```
 
-Only the `answer` text reaches the visitor. `action`, `confidence` and `cited_sources` are internal and the gateway does not forward them. The answer is buffered until validation completes, so a single `token` event carries the whole reply rather than word-by-word tokens.
+Only the `answer` text reaches the visitor. `action`, `confidence` and `cited_sources` are internal and the gateway does not forward them. Answer text streams as `token` events, except the final 100 characters, which are held back until validation completes (see Known gaps).
 
 ## Where tenant filtering is enforced
 
@@ -46,7 +47,7 @@ Tenant isolation happens at several layers, so a failure in one does not leak da
 
 ## Configuration
 
-All settings come from the environment or the repository `.env` (never committed): `MONGODB_URI`, `MONGODB_DB_NAME` (live database, default `rag_knowledge_base`), `MONGODB_TRAINING_DB_NAME` (development, training and evaluation only), `MONGODB_COLLECTION_NAME`, `MONGODB_VECTOR_INDEX_NAME`, `EMBEDDING_MODEL_NAME`, `HF_TOKEN`, `OLLAMA_HOST`, `OLLAMA_MODEL`, `CHAT_BACKEND_TOKEN`. See the [repository README](../README.md) for the full setup.
+All settings come from the environment or the repository `.env.dev` (never committed; the root `.env` is the Docker stack's): `MONGODB_URI`, `MONGODB_DB_NAME` (live database, default `rag_knowledge_base`), `MONGODB_TRAINING_DB_NAME` (development, training and evaluation only), `MONGODB_COLLECTION_NAME`, `MONGODB_VECTOR_INDEX_NAME`, `EMBEDDING_MODEL_NAME`, `HF_TOKEN`, `OLLAMA_HOST`, `OLLAMA_MODEL`, `CHAT_BACKEND_TOKEN`. See the [repository README](../README.md) for the full setup.
 
 ## Ingestion writes
 

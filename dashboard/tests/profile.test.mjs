@@ -1,7 +1,7 @@
-// Protects the profile save payload: editable fields only, server-owned policy and identity excluded.
+// Protects the profile save payload: editable fields only, identity and the shipped default policy excluded.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { profilePayload, readAssistantPolicy } from "../src/lib/profile.mjs";
+import { defaultAgentConfig, profilePayload, readAssistantPolicy } from "../src/lib/profile.mjs";
 
 const form = {
     name: "Example", industry: "Retail", contact_email: "help@example.com",
@@ -20,6 +20,37 @@ test("save keeps business customization and public phone but excludes server-own
     assert.equal("assistant_policy" in payload.agent_config, false);
     assert.equal("tenant_id" in payload, false);
     assert.equal("widget_config" in payload, false);
+});
+
+test("core policy is only sent when changed; default text or blank resets with null", () => {
+    const withPolicy = (core_policy) => ({ ...form, agent_config: { ...form.agent_config, core_policy } });
+    assert.equal("core_policy" in profilePayload(form, form).agent_config, false);
+    assert.equal("core_policy" in profilePayload(withPolicy(""), withPolicy("")).agent_config, false);
+    assert.equal(profilePayload(withPolicy(" Portfolio rules "), form).agent_config.core_policy, "Portfolio rules");
+    assert.equal(profilePayload(withPolicy(""), withPolicy("Portfolio rules")).agent_config.core_policy, null);
+    assert.equal(profilePayload(withPolicy("Core rules"), withPolicy("Portfolio rules")).agent_config.core_policy, null);
+    assert.equal("core_policy" in profilePayload(withPolicy("Core rules"), form).agent_config, false);
+});
+
+test("defaults rebuild the signup agent settings from the stored identity and clear the policy override", () => {
+    const defaults = defaultAgentConfig({ name: "Acme", industry: "Retail", contact_email: "help@acme.com" });
+    assert.equal(
+        defaults.system_prompt,
+        "You are a customer support agent for Acme (Retail). Answer customer questions strictly using the provided context chunks. If the answer is not verified by the provided context, state that clearly and offer to escalate the inquiry to help@acme.com."
+    );
+    assert.equal(defaults.core_policy, "");
+    assert.equal(defaults.agent_tone, "Warm & Professional");
+    assert.deepEqual([defaults.temperature, defaults.max_context_chunks, defaults.similarity_threshold], [0.2, 4, 0.7]);
+    // Resetting after a saved override sends null so the gateway removes it.
+    const saved = { ...form, agent_config: { ...form.agent_config, core_policy: "Custom" } };
+    const reset = { ...form, agent_config: defaultAgentConfig(form) };
+    assert.equal(profilePayload(reset, saved).agent_config.core_policy, null);
+});
+
+test("conversation recording is always sent as an explicit boolean, off unless switched on", () => {
+    assert.equal(profilePayload(form, form).record_conversations, false);
+    assert.equal(profilePayload({ ...form, record_conversations: true }, form).record_conversations, true);
+    assert.equal(profilePayload({ ...form, record_conversations: "true" }, form).record_conversations, false);
 });
 
 test("phone can be removed without changing untouched origin fallback", () => {

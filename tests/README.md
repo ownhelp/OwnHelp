@@ -21,11 +21,14 @@ None of the Python tests need MongoDB, Ollama, an embedding model download, netw
 | --- | --- |
 | `test_assistant_policy.py` | Core system policy wiring and the unsupported-handoff safeguard |
 | `test_chat_service.py` | Internal chat service: event stream, token auth, cross-tenant rejection, env handling |
+| `test_conversation_export.py` | Conversation export grouping, summary and CSV/JSON output |
 | `test_demo_setup.py` | Demo seeder target allow-list, idempotency, drift detection |
 | `test_deployment.py` | `src/deployment/config.py` and Compose file contracts |
 | `test_document_parser.py` | Structured document parser |
 | `test_document_pipeline_integration.py` | Parser to chunk provenance pipeline |
+| `test_ingest_replace.py` | Insert-before-delete re-ingestion and upload progress stages |
 | `test_rag_auth.py` | HF token passed to embedding model loading |
+| `test_reembed_chunk.py` | Single-chunk re-embedding (tenant scoping, token limit, atomic update) |
 | `test_retriever_rerank.py` | Query prefix, reranking, per-tenant filtering |
 | `test_table_parser.py` | Markdown table linearization (plain functions, wrapped by `load_tests`) |
 | `test_vector_index.py` | Vector index definition, creation and status |

@@ -7,6 +7,8 @@
  *                          It only SUBMITS the index. Atlas builds it asynchronously and nothing here
  *                          waits for that, so startup is never blocked.
  * - getVectorIndexStatus() live state, used by /api/health.
+ * - startVectorIndexSetup() the boot hook: ensureVectorIndex() plus a background monitor that logs
+ *                          when a building index becomes ready.
  *
  * States: missing | building | ready | failed | misconfigured | permission_denied | unknown | skipped
  *
@@ -52,6 +54,7 @@ function buildVectorIndexDefinition(numDimensions) {
     };
 }
 
+// Atlas and self-managed servers report missing privileges with different codes and text, so check both.
 function isPermissionError(error) {
     if (!error) return false;
     if (error.code === 13 || error.code === 8000 || error.codeName === "Unauthorized") return true;
@@ -105,6 +108,8 @@ function classifyIndex(index, expectedDimensions) {
     if (status === "FAILED") {
         return { state: "failed", message: "The server reports that the index build failed. Check the index in Atlas." };
     }
+    // An entry with no status and no queryable flag (a deployment that omits both) is treated as
+    // usable rather than reported as building forever.
     if (index.queryable === true || status === "READY" || (status === "" && index.queryable === undefined)) {
         return { state: "ready" };
     }
@@ -167,6 +172,7 @@ async function ensureCollections(db, names) {
 
 let lastSetup = null;
 
+// The most recent ensureVectorIndex() result (null before the first attempt); kept for /api/health and tests.
 function getLastVectorIndexSetup() {
     return lastSetup;
 }

@@ -20,9 +20,12 @@ const { getTicketLogsCollection } = require("../db/mongo");
 const { withTimeout, SAVE_TIMEOUT_MS } = require("./escalation");
 const processSecret = crypto.randomBytes(32);
 const TTL_MS = 24 * 60 * 60 * 1000;
+// Derived on each call (cheap) so a test or operator changing CHAT_FOLLOW_UP_SECRET takes effect
+// without a restart; SHA-256 turns any secret string into the 32 bytes AES-256 needs.
 function key() {
     return crypto.createHash("sha256").update(process.env.CHAT_FOLLOW_UP_SECRET || processSecret).digest();
 }
+// Token layout (base64url): 12-byte IV | 16-byte GCM auth tag | ciphertext of the JSON claims.
 function issueToken(tenantId, sessionId, ticketId, now = Date.now()) {
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv("aes-256-gcm", key(), iv);
@@ -44,6 +47,8 @@ function readToken(token, tenantId, sessionId, now = Date.now()) {
 function validEmail(value) {
     return typeof value === "string" && value.length <= 254 && isEmail(value, { allow_utf8_local_part: false });
 }
+// Returns a canonical E.164 number (plus " x<ext>"), "" for blank input (field cleared), or null
+// when the value is not a valid phone number. Only number punctuation is accepted, never URIs.
 function normalizePhone(value) {
     if (typeof value !== "string" || value.length > 50) return null;
     if (!value.trim()) return "";
@@ -56,11 +61,16 @@ function normalizePhone(value) {
 function validPhone(value) {
     return normalizePhone(value) !== null;
 }
+// Public contact details offered to the visitor; anything invalid becomes "" so a bad stored value
+// is simply not shown (the widget renders links only for non-empty fields).
 function businessContact(tenant) {
     const email = typeof tenant.contact_email === "string" ? tenant.contact_email.trim() : "";
     const phone = typeof tenant.contact_phone === "string" ? tenant.contact_phone.trim() : "";
     return { email: validEmail(email) ? email : "", phone: validPhone(phone) ? phone : "" };
 }
+// Writes the visitor's contact onto the ticket named by the (already verified) token claims.
+// Resolves true when saved or when identical details were already saved (idempotent retry), false
+// when different details won earlier or the ticket is gone; throws on timeout or unacknowledged write.
 async function saveContact(claims, contact) {
     return withTimeout((async () => {
         const collection = await getTicketLogsCollection();
@@ -78,4 +88,4 @@ async function saveContact(claims, contact) {
         return Boolean(existing && existing.customer_contact && existing.customer_contact.email === contact.email && existing.customer_contact.name === contact.name);
     })(), SAVE_TIMEOUT_MS);
 }
-module.exports = { issueToken, readToken, validEmail, validPhone, normalizePhone, businessContact, saveContact, TTL_MS };
+module.exports = { issueToken, readToken, validEmail, normalizePhone, businessContact, saveContact, TTL_MS };

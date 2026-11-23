@@ -1,9 +1,12 @@
+# Build context is the repository root (paths below start with dashboard/), as set in the compose file.
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app/dashboard
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci --include=dev --ignore-scripts
 COPY dashboard/ ./
+# NEXT_PUBLIC_ values are inlined into the browser bundle at build time, so the gateway URL must be
+# a build argument (the browser, not this container, calls the gateway).
 ARG NEXT_PUBLIC_GATEWAY_URL=http://localhost:4002
 ENV NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL}
 RUN npm run build
@@ -11,6 +14,7 @@ RUN npm run build
 FROM node:22-bookworm-slim
 WORKDIR /app/dashboard
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+# The whole builder directory (with node_modules and .next) is copied because `next start` needs both.
 COPY --from=builder /app/dashboard/ ./
 EXPOSE 3000
 CMD ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "3000"]

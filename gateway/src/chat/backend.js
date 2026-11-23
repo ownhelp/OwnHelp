@@ -53,6 +53,8 @@ function createHttpChatBackend({ url, token = "", fetchImpl = (...args) => fetch
                     signal,
                 });
             } catch (error) {
+                // Rethrow our own abort (visitor left or deadline) unchanged so routes/chat.js can
+                // tell it from a genuinely unreachable service.
                 if (signal && signal.aborted) throw error;
                 throw new ChatBackendError("Chat backend is unreachable.");
             }

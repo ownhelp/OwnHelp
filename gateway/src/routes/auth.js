@@ -62,6 +62,7 @@ function getRateLimitKey(req, email) {
     return `${ip}:${email || "unknown"}`;
 }
 
+// Read-only check; an expired window is dropped here so the key starts fresh.
 function checkLoginRateLimit(key) {
     const now = Date.now();
     const record = loginAttempts.get(key);
@@ -79,10 +80,12 @@ function checkLoginRateLimit(key) {
     return { allowed: true };
 }
 
+// Read per call so LOGIN_RATE_LIMIT_MAX (e.g. set by tests) applies without a restart.
 function maxLoginAttempts() {
     return Number(process.env.LOGIN_RATE_LIMIT_MAX) || MAX_LOGIN_ATTEMPTS;
 }
 
+// Counts one failed login; at the key cap the oldest tracked key is evicted (fail open for it).
 function recordFailedLoginAttempt(key) {
     const now = Date.now();
     const existing = loginAttempts.get(key);
@@ -101,6 +104,7 @@ function clearLoginAttempts(key) {
     loginAttempts.delete(key);
 }
 
+// Test hook: forget all failed-attempt counters.
 function resetLoginRateLimiter() {
     loginAttempts.clear();
 }

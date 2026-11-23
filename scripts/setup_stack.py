@@ -1,4 +1,4 @@
-"""Generate .env.compose.local for the OwnHelp Docker stack without modifying the existing .env.
+"""Generate .env, the private configuration Docker Compose reads automatically, for the OwnHelp stack.
 
 Usage:
     python scripts/setup_stack.py --model-dir DIR --model-sha256 HEX64 [--output PATH]
@@ -6,7 +6,8 @@ Usage:
 Arguments:
     --model-dir     Directory containing Llama-3.2-3B-Instruct.Q4_K_M.gguf (required).
     --model-sha256  Expected SHA-256 of that file, 64 hex characters (required).
-    --output        File to create (default: .env.compose.local in the project root).
+    --output        File to create (default: .env in the project root, which plain
+                    `docker compose` reads with no --env-file flag).
 
 Environment: MONGODB_URI, your MongoDB Atlas connection string (mongodb+srv:// or mongodb://).
 If it is not set, you are asked for it with a hidden prompt. It is deliberately NOT a command-line
@@ -41,11 +42,15 @@ def main():
                         help="Directory containing Llama-3.2-3B-Instruct.Q4_K_M.gguf.")
     parser.add_argument("--model-sha256", required=True,
                         help="Expected SHA-256 of the GGUF (64 hex characters); setup stops on mismatch.")
-    parser.add_argument("--output", type=Path, default=ROOT / ".env.compose.local",
-                        help="Configuration file to create (default: .env.compose.local).")
+    parser.add_argument("--output", type=Path, default=ROOT / ".env",
+                        help="Configuration file to create (default: .env).")
     args = parser.parse_args()
     if args.output.exists():
-        parser.exit(1, "Setup failed: Configuration already exists; keep it to preserve credentials and follow-up tokens.\n")
+        parser.exit(
+            1,
+            "Setup failed: Configuration already exists; keep it to preserve credentials and follow-up tokens. "
+            "If it is an older development .env, rename it to .env.dev first (host-run tools read that name).\n",
+        )
     try:
         uri = obtain_mongodb_uri()
         path = configure_stack(args.model_dir, args.model_sha256, args.output, uri)

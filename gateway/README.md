@@ -46,9 +46,9 @@ demo session can never act on a real database.
 
 ## Configuration
 
-Settings are read from the process environment, then `<repo root>/.env`, then `gateway/.env`. A file
+Settings are read from the process environment, then `<repo root>/.env.dev`, then `gateway/.env.dev` (the root `.env` is the Docker stack's file; inside Docker nothing is read from a file). A file
 never overrides an existing variable. At startup the gateway logs which files were loaded (names
-only, never values). Restart after editing `.env`. Chat settings are re-read on every request.
+only, never values). Restart after editing `.env.dev`. Chat settings are re-read on every request.
 
 | Variable | Default | Meaning |
 | :--- | :--- | :--- |
@@ -101,8 +101,8 @@ login throttling.
 | `GET /api/auth/session` | session | none | Current user and tenant. |
 | `POST /api/auth/logout` | session | none | Revoke the session and clear the cookie. |
 | `GET /api/tenants` | session | none | The session's own tenant only. |
-| `GET /api/tenants/:tenantId/config` | session | none | Tenant document plus read-only `assistant_policy`. |
-| `PUT /api/tenants/:tenantId/config` | session | none | Update profile, `agent_config`, `widget_config.allowed_origins`, contact fields. |
+| `GET /api/tenants/:tenantId/config` | session | none | Tenant document plus the default `assistant_policy` (read-only; sending it in a `PUT` is rejected). |
+| `PUT /api/tenants/:tenantId/config` | session | none | Partial update of profile, `agent_config`, `widget_config.allowed_origins`, contact fields and `record_conversations` (boolean, opt-in recording). `agent_config.core_policy` (a string of up to 8000 characters) replaces the default core policy for this business; `null` or `""` removes it so the default applies again. |
 | `POST /api/documents/upload` | session | none | Upload `.md` or `.json` (10 MB) and ingest it. Returns the JSON summary, or an NDJSON stage stream when the request sends `Accept: application/x-ndjson` (see below). Re-ingesting a `doc_id` inserts the new chunks before deleting the old ones, so a failed insert never leaves the document empty. |
 | `GET /api/tenants/:tenantId/documents` | session | none | Documents with chunk counts. |
 | `GET /api/tenants/:tenantId/documents/:docId` | session | none | One document's text and chunks. |
@@ -112,6 +112,7 @@ login throttling.
 | `POST /api/tickets`, `POST /api/tenants/:tenantId/tickets` | session | none | Create a ticket. |
 | `PATCH /api/tickets/:ticketId` | session | none | Update status, notes, contact or summary. |
 | `GET /widget.js` | none | none | The embeddable widget bundle. |
+| `GET /api/chat?tenant_id=` | none (anonymous, origin checked) | per IP | `{ "record_conversations": boolean }`, so the widget knows whether to show its recording notice. |
 | `POST /api/chat` | none (anonymous) | per IP, per session | Grounded reply as SSE, or one JSON body without `Accept: text/event-stream`. 16 KB body cap. |
 | `POST /api/chat/contact` | follow-up token | per IP, per session | Save a visitor's name and email on an escalated ticket. 8 KB body cap. |
 
@@ -178,7 +179,9 @@ The visitor never receives document sources, scores, chunk text, the raw action 
 the model answers with `action: "escalate"`, the gateway saves the conversation as one ticket per
 tenant and session in `ticket_logs` (`status: pending_review`, reason `not_in_docs` or
 `docs_require_human`, up to the last 40 messages, source ids and scores only). A repeated escalation
-updates the same ticket and keeps admin notes. Ordinary answered conversations are not stored.
+updates the same ticket and keeps admin notes. Ordinary answered conversations are not stored,
+unless the business turned on `record_conversations` and the widget confirmed it showed the
+recording notice; then each turn is written, with contact details redacted, to `conversation_logs`.
 
 The final `done` waits up to five seconds for the acknowledged ticket save. If it fails, no
 `follow_up` is offered and a fixed notice tells the visitor the form is unavailable.
@@ -217,7 +220,7 @@ the held-out benchmark. Behind nginx or another proxy, disable buffering and com
 ## Running
 
 ```bash
-# Gateway (reads the repo-root .env; copy .env.example first)
+# Gateway (reads the repo-root .env.dev; copy .env.dev.example first)
 cd gateway
 npm install
 npm run dev        # or: npm start
@@ -233,7 +236,7 @@ uv run python scripts/run_chat_service.py --port 8100
 ```
 
 For `standard` mode open `http://localhost:3000/signup` or `/login`. For `preset_training`, set
-`APP_MODE=preset_training` and `MONGODB_TRAINING_DB_NAME=<dev database>` in `.env`; the login page
+`APP_MODE=preset_training` and `MONGODB_TRAINING_DB_NAME=<dev database>` in `.env.dev`; the login page
 then shows one-click demo buttons for the preset tenants.
 
 Docker: the full containerised stack is documented in [deployment/README.md](../deployment/README.md),

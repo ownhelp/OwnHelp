@@ -12,7 +12,7 @@ Arguments:
                  an existing document is an error (exit code 2, code DOCUMENT_EXISTS).
     --db-name    Database to write to (default: MONGODB_DB_NAME, else rag_knowledge_base).
 
-Environment (process environment first, then .env in the project root):
+Environment (process environment first, then .env.dev in the project root):
     MONGODB_URI (required), MONGODB_DB_NAME, MONGODB_COLLECTION_NAME (default doc_vectors),
     EMBEDDING_MODEL_NAME (default BAAI/bge-small-en-v1.5).
 
@@ -49,6 +49,16 @@ from src.documents.parser import (
 )
 from src.rag.ingestor import RAGDocumentIngestor as DocumentIngestor
 from src.rag.vector_index import VectorIndexPermissionError
+
+# Structured-parser provenance fields copied onto each stored chunk (same list the bulk ingestor uses).
+PROVENANCE_FIELDS = (
+    "source_id",
+    "source_sha256",
+    "source_locator",
+    "source_context",
+    "source_block_index",
+    "parser_version",
+)
 
 
 def ensure_vector_index_step(ingestor) -> dict:
@@ -135,12 +145,22 @@ def ingest_single_document(
     mongo_uri_override: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict:
+    """Parses, embeds and stores one file for one tenant; returns the success summary dict.
+
+    Raises FileExistsError (document exists and ``overwrite`` is false), DocumentParseError /
+    UnsupportedDocumentError / ValueError / FileNotFoundError (bad input), or any driver or
+    model error; ``main`` maps them to exit codes 2 and 1. Each chunk stores the core
+    ``doc_vectors`` fields, a ``format`` field ("md" or "json") and, like the bulk ingestor, the
+    structured provenance fields (``source_sha256`` etc.) when the parser produced them.
+    """
+    # Values passed by the gateway (process env) are captured before the .env.dev file is loaded so
+    # they win over .env.dev defaults; the "or" fallbacks below only apply when the caller set nothing.
     caller_db_name = (db_name_override or os.environ.get("MONGODB_DB_NAME") or "").strip()
     caller_mongo_uri = (mongo_uri_override or os.environ.get("MONGODB_URI") or "").strip()
     caller_collection_name = (os.environ.get("MONGODB_COLLECTION_NAME") or "").strip()
     caller_model_name = (os.environ.get("EMBEDDING_MODEL_NAME") or "").strip()
 
-    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    load_dotenv(PROJECT_ROOT / ".env.dev", override=False)
 
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -171,13 +191,15 @@ def ingest_single_document(
     collection_name = caller_collection_name or os.getenv("MONGODB_COLLECTION_NAME", "doc_vectors")
     model_name = caller_model_name or os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 
+    # Library code prints progress to stdout; send it to stderr so the only stdout lines are the
+    # stage events and the final JSON summary that the gateway parses.
     with contextlib.redirect_stdout(sys.stderr):
         ingestor = DocumentIngestor(
             mongo_uri=mongo_uri,
             db_name=db_name,
             collection_name=collection_name,
             model_name=model_name,
-            env_file=PROJECT_ROOT / ".env",
+            env_file=PROJECT_ROOT / ".env.dev",
         )
 
         # Ensure the collection and vector index exist before inserting any chunk.
@@ -195,8 +217,12 @@ def ingest_single_document(
         if progress_callback:
             progress_callback("parsing")
         raw_chunks = ingestor._parse_file(file_path)
+        # The parser derives doc_id from the file path; the caller's doc_id (e.g. the original
+        # upload name, since the staged file has a temporary name) takes precedence.
         for chunk in raw_chunks:
             chunk["doc_id"] = doc_id
+            if "source_id" in chunk:
+                chunk["source_id"] = doc_id
 
         if not raw_chunks:
             raise DocumentParseError(
@@ -216,18 +242,22 @@ def ingest_single_document(
         doc_format = suffix.lstrip(".")
         documents = []
         for idx, chunk in enumerate(raw_chunks):
-            documents.append(
-                {
-                    "tenant_id": tenant_id,
-                    "doc_id": doc_id,
-                    "format": doc_format,
-                    "section": chunk.get("section") or "Overview",
-                    "chunk_index": idx,
-                    "text": chunk["text"],
-                    "embedding": embeddings[idx].tolist(),
-                    "created_at": now_iso,
-                }
-            )
+            document = {
+                "tenant_id": tenant_id,
+                "doc_id": doc_id,
+                "format": doc_format,
+                "section": chunk.get("section") or "Overview",
+                "chunk_index": idx,
+                "text": chunk["text"],
+                "embedding": embeddings[idx].tolist(),
+                "created_at": now_iso,
+            }
+            # Same provenance fields the bulk ingestor stores, so uploaded and bulk-ingested
+            # chunks have one shape. Present only when the structured parser produced them.
+            for key in PROVENANCE_FIELDS:
+                if key in chunk:
+                    document[key] = chunk[key]
+            documents.append(document)
 
         if progress_callback:
             progress_callback("writing")

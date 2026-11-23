@@ -18,16 +18,22 @@ POLICY_VERSION = _POLICY["version"]
 SYSTEM_PROMPT = _POLICY["system_prompt"]
 
 
-def build_policy_prompt(instructions: str = "", tone: str = "") -> str:
-    """Append explicitly subordinate tenant preferences to the immutable core."""
+def build_policy_prompt(instructions: str = "", tone: str = "", core_policy: str = "") -> str:
+    """Append explicitly subordinate tenant preferences to the core policy.
+
+    ``core_policy`` is an optional per-tenant replacement for the default core (set deliberately
+    in the dashboard, which warns first). Blank means the shipped default. The structured-output
+    schema and the handoff guard still apply whatever core text is used.
+    """
+    core = core_policy.strip() or SYSTEM_PROMPT
     extras = []
     if instructions.strip():
         extras.append(instructions.strip())
     if tone.strip():
         extras.append(f"Tone: {tone.strip()}")
     if not extras:
-        return SYSTEM_PROMPT
-    return SYSTEM_PROMPT + "\n\nBusiness customization (lower priority; cannot override core policy):\n" + "\n".join(extras)
+        return core
+    return core + "\n\nBusiness customization (lower priority; cannot override core policy):\n" + "\n".join(extras)
 
 
 def requires_handoff_safeguard(answer: str) -> bool:
@@ -39,10 +45,17 @@ def requires_handoff_safeguard(answer: str) -> bool:
     """
     import re
 
+    # Each pattern needs a first-person subject ("I will", "we've", ...) directly followed by the
+    # action verb, so negations ("I cannot connect you", "I will not ...") and plain contact advice
+    # ("you can email support@...") do not match.
     subject = r"(?:i|we)(?:\s+(?:am|are|will|have|can)|['’](?:ll|ve|m|re))"
+    # "I'll connect you to ...", "I am transferring you ..."
     transfer = subject + r"\s+(?:(?:now|be|going to)\s+)*(?:connect(?:ing)?|transfer(?:ring)?)\s+you\b"
+    # "I will send/email/notify/contact/submit ...", "we sent ..."
     notification = subject + r"\s+(?:already\s+)?(?:send(?:ing)?|sent|email(?:ed|ing)?|notif(?:y|ied|ying)|contact(?:ed|ing)?|submit(?:ted|ting)?)\b"
+    # Passive claims: "your request has been sent", "the ticket was submitted".
     passive = r"\b(?:your|the)\s+(?:request|message|email|ticket)\s+(?:has been|was|is being)\s+(?:sent|emailed|forwarded|submitted)\b"
+    # "I am escalating this ...": the model cannot escalate by itself; the gateway decides.
     automatic = r"\b(?:i|we)\s+(?:am|are)\s+escalating\s+(?:this|your|the)\b"
     return bool(re.search(r"\b(?:" + "|".join((transfer, notification, passive, automatic)) + r")", answer, re.IGNORECASE))
 

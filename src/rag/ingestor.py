@@ -43,13 +43,14 @@ class RAGDocumentIngestor:
         if env_file:
             load_dotenv(dotenv_path=env_file, override=False)
         else:
-            load_dotenv(find_dotenv(usecwd=True), override=False)
+            # ".env" is the Docker stack's file, so look for the development file by name.
+            load_dotenv(find_dotenv(".env.dev", usecwd=True), override=False)
 
         resolved_uri = mongo_uri or os.getenv("MONGODB_URI")
         if not resolved_uri or "<username>" in resolved_uri or "<password>" in resolved_uri:
             raise ValueError(
                 "MongoDB connection URI is missing or contains placeholder values. "
-                "Please configure MONGODB_URI in your .env file or pass mongo_uri to RAGDocumentIngestor."
+                "Please configure MONGODB_URI in your .env.dev file or pass mongo_uri to RAGDocumentIngestor."
             )
 
         resolved_db = db_name or os.getenv("MONGODB_DB_NAME", "rag_knowledge_base")

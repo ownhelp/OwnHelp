@@ -82,7 +82,7 @@ Open the dashboard at <http://localhost:3001/login> and the gateway health endpo
 | `setup.sh reset [--rebuild]` | **Deletes this project's volumes**, including all training data and uploads |
 
 Never use `reset` as a routine restart. It only affects this project, never the standard
-stack or the repository root `.env`.
+stack or the repository root `.env` / `.env.dev`.
 
 ## Host Ollama or bundled Ollama
 
@@ -113,7 +113,7 @@ generation needs one. To use a locally fine-tuned model, see the model import st
 
 On first run the launcher creates `examples/client-training/.env.local` (gitignored) with a
 random local database password. [`.env.example`](.env.example) lists and explains every
-setting, marking each as required or optional. The repository root `.env` is never read, so
+setting, marking each as required or optional. The repository root `.env` and `.env.dev` are never read, so
 real Atlas credentials cannot leak into the sandbox. Edit `.env.local` and rerun
 `setup.sh setup` to apply changes; changing `NEXT_PUBLIC_GATEWAY_URL` needs that rebuild, and
 changing the MongoDB password needs `reset` because the volume keeps the old one.

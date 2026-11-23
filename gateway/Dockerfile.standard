@@ -3,6 +3,7 @@ FROM node:22-bookworm-slim AS node-runtime
 FROM node-runtime AS widget-build
 WORKDIR /widget
 COPY widget/package.json widget/package-lock.json ./
+# --ignore-scripts: dependency install scripts are not needed to build the bundle, so none run.
 RUN npm ci --ignore-scripts
 COPY widget/vite.config.js ./
 COPY widget/src ./src

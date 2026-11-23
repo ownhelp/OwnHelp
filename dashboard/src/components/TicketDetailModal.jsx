@@ -1,12 +1,14 @@
 "use client";
 
 /**
- * Modal for reviewing one ticket: conversation, model answer and rationale, retrieved context
- * chunks, optional visitor contact details with a prefilled mailto link, admin notes and status
- * actions.
+ * Right-hand drawer (full height, full width on phones) for reviewing one ticket: conversation,
+ * model answer and rationale, retrieved context chunks, optional visitor contact details with a
+ * prefilled mailto link, admin notes and status actions. Opened from the tickets page, which owns
+ * the ticket list and performs the status update.
  */
 
 import React, { useState, useEffect } from "react";
+import { formatLocalDateTime } from "@/lib/dateTime.mjs";
 import {
     getScoreBadgeClasses,
     getStatusBadge,
@@ -61,6 +63,17 @@ export default function TicketDetailModal({
     const [adminNotes, setAdminNotes] = useState("");
     const [copiedEmail, setCopiedEmail] = useState(false);
 
+    // Escape closes the drawer, matching the "ESC / Close" label on the button.
+    useEffect(() => {
+        function handleKeyDown(event) {
+            if (event.key === "Escape") onClose();
+        }
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [onClose]);
+
+    // Reset the notes draft (and the "Copied" flag) whenever a different ticket is opened, deferred
+    // one microtask to keep setState out of the effect's synchronous body.
     useEffect(() => {
         if (!ticket) return;
         let cancelled = false;
@@ -112,6 +125,7 @@ export default function TicketDetailModal({
     const rawQuestion = (ticket.question || "").trim();
     const businessLabel = (tenantName || ticket.tenant_id || "Customer").trim();
 
+    // Only built when the visitor left an email; follow-up is by email (no live agent handoff).
     const mailtoHref = contactEmail.trim()
         ? `mailto:${encodeURIComponent(contactEmail.trim())}?subject=${encodeURIComponent(
               `${businessLabel} Support Follow-Up`
@@ -126,14 +140,14 @@ export default function TicketDetailModal({
             onClick={onClose}
         >
             <div
-                className="h-full w-full max-w-3xl bg-zinc-950 border-l border-zinc-800 flex flex-col"
+                className="h-dvh w-full max-w-3xl bg-zinc-950 sm:border-l border-zinc-800 flex flex-col"
                 onClick={(e) => e.stopPropagation()}
             >
                 {/* Drawer Header */}
-                <div className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between bg-zinc-900/40">
-                    <div>
+                <div className="border-b border-zinc-800 px-4 sm:px-6 py-3 sm:py-4 flex items-start justify-between gap-3 bg-zinc-900/40">
+                    <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-mono text-sm font-semibold text-zinc-100">
+                            <span className="break-all font-mono text-sm font-semibold text-zinc-100">
                                 {ticket.ticket_id}
                             </span>
                             <span
@@ -154,26 +168,24 @@ export default function TicketDetailModal({
                                 </span>
                             )}
                         </div>
-                        <p className="font-mono text-xs text-zinc-500 mt-1">
+                        <p className="break-words font-mono text-xs text-zinc-500 mt-1">
                             tenant_id: {ticket.tenant_id} • turns:{" "}
                             {messages.length} • created_at:{" "}
-                            {ticket.created_at
-                                ? new Date(ticket.created_at).toISOString()
-                                : "—"}
+                            {formatLocalDateTime(ticket.created_at, { zone: true })}
                         </p>
                     </div>
 
                     <button
                         type="button"
                         onClick={onClose}
-                        className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-400 hover:text-zinc-100 cursor-pointer"
+                        className="shrink-0 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-2 sm:px-2.5 sm:py-1 font-mono text-xs text-zinc-400 hover:text-zinc-100 cursor-pointer"
                     >
-                        ESC / Close
+                        <span className="hidden sm:inline">ESC / </span>Close
                     </button>
                 </div>
 
                 {/* Drawer Body */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5 sm:space-y-6">
                     {/* 1. Customer Contact & Escalation Handoff Metadata */}
                     <div className="rounded border border-zinc-800 bg-zinc-900/30 p-4 space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -181,7 +193,7 @@ export default function TicketDetailModal({
                                 <span className="font-mono text-xs uppercase text-zinc-400 block">
                                     Customer Contact &amp; Escalation Handoff
                                 </span>
-                                <p className="font-mono text-xs text-zinc-200 mt-1">
+                                <p className="break-all font-mono text-xs text-zinc-200 mt-1">
                                     {contactName || "Anonymous Visitor"}{" "}
                                     {contactEmail ? (
                                         <span className="text-zinc-400">
@@ -196,18 +208,18 @@ export default function TicketDetailModal({
                             </div>
 
                             {contactEmail ? (
-                                <div className="flex items-center gap-2">
+                                <div className="flex w-full sm:w-auto items-center gap-2">
                                     <button
                                         type="button"
                                         onClick={handleCopyEmail}
-                                        className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-300 cursor-pointer"
+                                        className="flex-1 sm:flex-none rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-2 sm:py-1 font-mono text-xs text-zinc-300 cursor-pointer"
                                     >
                                         {copiedEmail ? "Copied" : "Copy Email"}
                                     </button>
                                     <a
                                         href={mailtoHref}
                                         target="_blank"
-                                        className="rounded border border-zinc-700 bg-zinc-100 hover:bg-white px-3 py-1 font-mono text-xs font-medium text-zinc-900"
+                                        className="flex-1 sm:flex-none text-center rounded border border-zinc-700 bg-zinc-100 hover:bg-white px-3 py-2 sm:py-1 font-mono text-xs font-medium text-zinc-900"
                                     >
                                         Draft Email
                                     </a>
@@ -265,14 +277,7 @@ export default function TicketDetailModal({
                                                     #{idx + 1} • {roleBadge.label}
                                                 </span>
                                                 <span className="font-mono text-[11px] text-zinc-500">
-                                                    {turn.timestamp
-                                                        ? new Date(
-                                                              turn.timestamp
-                                                          )
-                                                              .toISOString()
-                                                              .slice(0, 19)
-                                                              .replace("T", " ")
-                                                        : ""}
+                                                    {formatLocalDateTime(turn.timestamp, { seconds: true, fallback: "" })}
                                                 </span>
                                             </div>
                                             <p className="text-xs text-zinc-200 leading-relaxed whitespace-pre-wrap">
@@ -349,6 +354,7 @@ export default function TicketDetailModal({
                         ) : (
                             <div className="space-y-3">
                                 {retrievedChunks.map((chunk, idx) => {
+                                    // Older tickets stored only one overall score, so fall back to it.
                                     const chunkScore = Number(
                                         chunk.score ??
                                             ticket.similarity_score ??
@@ -362,7 +368,7 @@ export default function TicketDetailModal({
                                             className="rounded border border-zinc-800 bg-zinc-900/30 overflow-hidden"
                                         >
                                             <div className="border-b border-zinc-800 px-4 py-2 flex flex-wrap items-center justify-between gap-2 bg-zinc-900/60">
-                                                <div className="flex items-center gap-2 font-mono text-xs">
+                                                <div className="flex min-w-0 flex-wrap items-center gap-x-2 break-all font-mono text-xs">
                                                     <span className="text-zinc-100 font-semibold">
                                                         {chunk.doc_id}
                                                     </span>
@@ -411,17 +417,17 @@ export default function TicketDetailModal({
                 </div>
 
                 {/* Drawer Footer Actions */}
-                <div className="border-t border-zinc-800 px-6 py-4 bg-zinc-900/40 flex flex-wrap items-center justify-between gap-3">
-                    <span className="font-mono text-xs text-zinc-500">
+                <div className="border-t border-zinc-800 px-4 sm:px-6 py-3 sm:py-4 bg-zinc-900/40 flex flex-wrap items-center justify-between gap-3">
+                    <span className="hidden sm:block min-w-0 truncate font-mono text-xs text-zinc-500">
                         PATCH /api/tickets/{ticket.ticket_id}
                     </span>
 
-                    <div className="flex items-center gap-2.5">
+                    <div className="grid w-full sm:w-auto grid-cols-2 sm:flex items-center gap-2.5">
                         <button
                             type="button"
                             disabled={updating}
                             onClick={() => handleAction("flagged")}
-                            className="rounded border border-red-800 bg-red-950/60 hover:bg-red-900/60 px-3.5 py-1.5 text-xs font-medium text-red-200 disabled:opacity-50 cursor-pointer transition-colors"
+                            className="rounded border border-red-800 bg-red-950/60 hover:bg-red-900/60 px-3.5 py-2.5 sm:py-1.5 text-xs font-medium text-red-200 disabled:opacity-50 cursor-pointer transition-colors"
                         >
                             {updating ? "Updating..." : "Flag for Review"}
                         </button>
@@ -429,7 +435,7 @@ export default function TicketDetailModal({
                             type="button"
                             disabled={updating}
                             onClick={() => handleAction("resolved")}
-                            className="rounded bg-zinc-100 hover:bg-white px-4 py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-50 cursor-pointer transition-colors"
+                            className="rounded bg-zinc-100 hover:bg-white px-4 py-2.5 sm:py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-50 cursor-pointer transition-colors"
                         >
                             {updating ? "Saving..." : "Approve Answer"}
                         </button>

@@ -6,8 +6,9 @@
  * The chat route reads these same fields on every message, so edits apply without a restart.
  *
  * Security: the tenant comes from the session via authorizeTenantAccess; PUT only writes fields
- * that pass validateAndBuildUpdate (an allowlist), and assistant_policy is read-only so an admin
- * cannot weaken the shared base safety prompt. Mode rules hide preset tenants in standard mode.
+ * that pass validateAndBuildUpdate (an allowlist). assistant_policy is the shipped default core
+ * prompt and is read-only; a tenant can override it for itself only via agent_config.core_policy
+ * (null resets it). Mode rules hide preset tenants in standard mode.
  *
  * Callers: the dashboard settings page.
  */
@@ -23,9 +24,15 @@ const assistantPolicy = require("../../../src/inference/system_policy.json");
 
 const router = express.Router();
 
+const MAX_CORE_POLICY_LENGTH = 8000;
+
+// Allowlist validator for PUT: returns the Mongo $set / $unset documents plus every validation error
+// (collected rather than failing on the first, so the dashboard can show them all). Unknown body
+// fields are ignored, never written.
 function validateAndBuildUpdate(body) {
     const errors = [];
     const setFields = {};
+    const unsetFields = {};
     if (body.assistant_policy !== undefined) errors.push("assistant_policy is read-only.");
     if (body.contact_phone !== undefined) {
         const phone = normalizePhone(body.contact_phone);
@@ -49,6 +56,15 @@ function validateAndBuildUpdate(body) {
             errors.push("contact_email must be a valid email address of at most 254 characters.");
         } else {
             setFields.contact_email = body.contact_email.trim();
+        }
+    }
+
+    // Opt-in research logging of chat turns (chat/conversationLog.js); off unless set to true.
+    if (body.record_conversations !== undefined) {
+        if (typeof body.record_conversations !== "boolean") {
+            errors.push("record_conversations must be true or false.");
+        } else {
+            setFields.record_conversations = body.record_conversations;
         }
     }
 
@@ -89,6 +105,23 @@ function validateAndBuildUpdate(body) {
                 } else {
                     setFields["agent_config.system_prompt"] =
                         ac.system_prompt.trim();
+                }
+            }
+
+            // null (or an empty string) removes the override so the shipped default applies again.
+            if (ac.core_policy !== undefined) {
+                if (ac.core_policy === null || ac.core_policy === "") {
+                    unsetFields["agent_config.core_policy"] = "";
+                } else if (
+                    typeof ac.core_policy !== "string" ||
+                    !ac.core_policy.trim() ||
+                    ac.core_policy.length > MAX_CORE_POLICY_LENGTH
+                ) {
+                    errors.push(
+                        `agent_config.core_policy must be null (reset to default) or a non-empty string of at most ${MAX_CORE_POLICY_LENGTH} characters.`
+                    );
+                } else {
+                    setFields["agent_config.core_policy"] = ac.core_policy.trim();
                 }
             }
 
@@ -165,7 +198,7 @@ function validateAndBuildUpdate(body) {
         }
     }
 
-    return { errors, setFields };
+    return { errors, setFields, unsetFields };
 }
 
 /**
@@ -279,7 +312,7 @@ router.put("/:tenantId/config", async (req, res) => {
         );
         if (!authorizedTenantId) return;
 
-        const { errors, setFields } = validateAndBuildUpdate(req.body || {});
+        const { errors, setFields, unsetFields } = validateAndBuildUpdate(req.body || {});
 
         if (errors.length > 0) {
             return res.status(400).json({
@@ -288,7 +321,7 @@ router.put("/:tenantId/config", async (req, res) => {
             });
         }
 
-        if (Object.keys(setFields).length === 0) {
+        if (Object.keys(setFields).length === 0 && Object.keys(unsetFields).length === 0) {
             return res.status(400).json({
                 error: "No valid configuration fields provided for update.",
             });
@@ -299,7 +332,10 @@ router.put("/:tenantId/config", async (req, res) => {
         const businesses = await getBusinessesCollection();
         const updatedTenant = await businesses.findOneAndUpdate(
             { tenant_id: authorizedTenantId },
-            { $set: setFields },
+            {
+                $set: setFields,
+                ...(Object.keys(unsetFields).length ? { $unset: unsetFields } : {}),
+            },
             { returnDocument: "after", projection: { _id: 0 } }
         );
 

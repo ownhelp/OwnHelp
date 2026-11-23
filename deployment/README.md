@@ -4,17 +4,17 @@ How the OwnHelp stack is packaged and started with Docker Compose: the Ollama mo
 
 ## Privacy trade-off
 
-Inference runs locally: the model, the prompts and the generated answers stay on the machine that runs this stack. The database does not. The standard stack has no database container; it uses a MongoDB Atlas cluster that you own. Documents, embeddings, tickets, saved contact details and business records are stored in that cluster, and the chat service reads retrieved chunks from it on every question. You control the cluster, its region and its access rules, but that data is hosted by MongoDB Atlas, not on your server. This keeps a database (and its storage) off the client's server; an offline, all-local variant exists only as a separate sandbox, `examples/client-training/`, which uses synthetic data.
+Inference runs locally: the model, the prompts and the generated answers stay on the machine that runs this stack. The database does not. The standard stack has no database container; it uses a MongoDB Atlas cluster that you own. Documents, embeddings, tickets, saved contact details and business records (and recorded chat turns, only for a business that turned on conversation recording) are stored in that cluster, and the chat service reads retrieved chunks from it on every question. You control the cluster, its region and its access rules, but that data is hosted by MongoDB Atlas, not on your server. This keeps a database (and its storage) off the client's server; an offline, all-local variant exists only as a separate sandbox, `examples/client-training/`, which uses synthetic data.
 
 Files covered here:
 
 | Path | Purpose |
 |---|---|
 | `compose.yaml` | The stack: Ollama, model import, chat service, gateway, dashboard. The database is your Atlas cluster. |
-| `.env.compose.example` | Template for the private `.env.compose.local`. |
+| `.env.example` | Template for the private `.env` that Compose reads automatically. |
 | `deployment/ollama/Modelfile` | Ollama import recipe for the GGUF. |
 | `deployment/requirements.cpu.lock` | Hashed, CPU-only Python dependency lock used by the images. |
-| `scripts/setup_stack.py` | Verifies the GGUF and writes `.env.compose.local`. |
+| `scripts/setup_stack.py` | Verifies the GGUF and writes `.env`. |
 | `scripts/import_model.sh` | Runs inside the `model-init` service to verify and import the GGUF. |
 
 ## Prerequisites
@@ -30,12 +30,12 @@ Files covered here:
 ```bash
 sha256sum /path/to/model-dir/Llama-3.2-3B-Instruct.Q4_K_M.gguf     # note the digest
 python scripts/setup_stack.py --model-dir /path/to/model-dir --model-sha256 <digest>
-docker compose --env-file .env.compose.local up -d --wait
+docker compose up -d --wait
 ```
 
-`setup_stack.py` asks for your Atlas connection string at a hidden prompt (or reads it from the `MONGODB_URI` environment variable). It is never accepted as a command-line argument, so it stays out of shell history, and it is never printed. The script checks that it starts with `mongodb+srv://` or `mongodb://`; it does not contact Atlas. It writes `.env.compose.local` once (mode 0600) and never overwrites it, so the URI, credentials and follow-up secrets survive restarts. It starts no services. Keep the file private and out of version control. The first `up` builds the gateway and dashboard images, which takes several minutes.
+`setup_stack.py` asks for your Atlas connection string at a hidden prompt (or reads it from the `MONGODB_URI` environment variable). It is never accepted as a command-line argument, so it stays out of shell history, and it is never printed. The script checks that it starts with `mongodb+srv://` or `mongodb://`; it does not contact Atlas. It writes `.env` once (mode 0600) and never overwrites it (if you have an older development `.env`, rename it to `.env.dev` first), so the URI, credentials and follow-up secrets survive restarts. It starts no services. Keep the file private and out of version control. The first `up` builds the gateway and dashboard images, which takes several minutes.
 
-Then open the dashboard at `http://localhost:3002`. Stop with `docker compose --env-file .env.compose.local down`. The `ollama_models` and `hf_cache` volumes keep the imported model and embedding cache; `down -v` deletes only those. Your data lives in Atlas and is not touched by `down -v`.
+Then open the dashboard at `http://localhost:3002`. Stop with `docker compose down`. The `ollama_models` and `hf_cache` volumes keep the imported model and embedding cache; `down -v` deletes only those. Your data lives in Atlas and is not touched by `down -v`.
 
 ## The Atlas database
 
@@ -72,7 +72,7 @@ Startup order: `ollama` becomes healthy, `model-init` imports the model and exit
 
 ## Environment variables
 
-Compose reads `.env.compose.local` (see `.env.compose.example`). Required variables use `${VAR:?message}`, so Compose fails fast with a clear message when one is missing.
+Compose reads the `.env` file in the repository root automatically, with no `--env-file` flag (see `.env.example`). Required variables use `${VAR:?message}`, so Compose fails fast with a clear message when one is missing.
 
 | Variable | Required | Meaning |
 |---|---|---|
@@ -92,7 +92,7 @@ Compose reads `.env.compose.local` (see `.env.compose.example`). Required variab
 
 Values that Compose fixes for the runtime (not user settings): `MONGODB_COLLECTION_NAME=doc_vectors`, `MONGODB_VECTOR_INDEX_NAME=vector_index`, `EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5`, `OLLAMA_HOST=http://ollama:11434`.
 
-Running the gateway and scripts directly on the host (not in Docker) uses a different file, `.env`; see `.env.example`.
+Running the gateway and scripts directly on the host (not in Docker) uses a different file, `.env.dev`; see `.env.dev.example`.
 
 ## Ollama Modelfile
 
@@ -109,7 +109,7 @@ If you change the Modelfile, `import_model.sh` detects it (the fingerprint inclu
 
 The GGUF is never baked into an image and never copied into the repository. The check happens twice:
 
-1. `scripts/setup_stack.py` hashes `$MODEL_GGUF_DIR/Llama-3.2-3B-Instruct.Q4_K_M.gguf` and refuses to write `.env.compose.local` when it differs from `--model-sha256`.
+1. `scripts/setup_stack.py` hashes `$MODEL_GGUF_DIR/Llama-3.2-3B-Instruct.Q4_K_M.gguf` and refuses to write `.env` when it differs from `--model-sha256`.
 2. `scripts/import_model.sh` runs in `model-init`, recomputes the SHA-256 of the mounted file, and exits non-zero on mismatch, so a swapped or corrupted file can never reach Ollama. It never falls back to another model.
 
 On success it runs `ollama create "$OLLAMA_MODEL" -f /model-import/Modelfile` and stores a fingerprint (GGUF hash, Modelfile hash, installed Modelfile hash) in `/root/.ollama/ownhelp-imports` on the `ollama_models` volume. A later `up` with the same inputs skips the import. Because `chat-service` requires `model-init` to complete successfully, the stack does not start with an unverified model.
@@ -143,10 +143,10 @@ sudo systemctl restart docker
 After the `ollama` image is pulled, check container GPU access before starting the whole stack:
 
 ```bash
-docker compose --env-file .env.compose.local -f compose.yaml run --rm --no-deps --entrypoint nvidia-smi ollama
+docker compose -f compose.yaml run --rm --no-deps --entrypoint nvidia-smi ollama
 ```
 
-A passing `nvidia-smi` does not prove the model runs on the GPU. After a real chat reply, run `docker compose --env-file .env.compose.local exec ollama ollama ps` and confirm it reports 100% GPU.
+A passing `nvidia-smi` does not prove the model runs on the GPU. After a real chat reply, run `docker compose exec ollama ollama ps` and confirm it reports 100% GPU.
 
 ## Operating notes
 
@@ -157,7 +157,7 @@ Observed on one machine (Ubuntu, RTX 4060 with 8 GB VRAM):
 - A missing GGUF directory or a checksum mismatch stops `model-init` with a nonzero exit. The stack never falls back to the base model.
 - Browser chat is rejected from any origin not listed for the business. The check applies to browsers only; requests without an `Origin` header (curl, server-side clients) are not blocked by it.
 - Use a different Compose project name (`-p`), ports and `MONGODB_DB_NAME` for independent installations.
-- `docker compose config` prints secrets from `.env.compose.local`, including the Atlas URI. Do not share its output as a log.
+- `docker compose config` prints secrets from `.env`, including the Atlas URI. Do not share its output as a log.
 - Atlas must be reachable from the machine (network access rule, DNS for `mongodb+srv://`); the chat service waits up to 5 seconds for server selection per request.
 
 If Docker Engine references an unavailable `docker-credential-desktop` helper, public image pulls can use an isolated client configuration without touching your saved one:
@@ -183,7 +183,7 @@ Manual checklist for those three:
 
 1. Upload: sign in to the dashboard, upload a small `.md` document, and confirm it appears in the document list with a nonzero chunk count and no error; then ask the widget a question only that document can answer and check the answer cites it. Delete the test document afterward.
 2. First-ingest delay: on a scratch Atlas cluster or database with no `vector_index`, start the stack, note when `/api/health` reports `vector_index_ready: true`, upload a document, and time how long until a question about it retrieves its chunks. Record both times.
-3. Model re-import: change `MODEL_GGUF_DIR`/`MODEL_GGUF_SHA256` to a new file, run `docker compose --env-file .env.compose.local up -d --wait`, confirm `model-init` logs the checksum check and import once, then restart and confirm it logs a skip.
+3. Model re-import: change `MODEL_GGUF_DIR`/`MODEL_GGUF_SHA256` to a new file, run `docker compose up -d --wait`, confirm `model-init` logs the checksum check and import once, then restart and confirm it logs a skip.
 
 Not verified: automatic creation of the vector index (the index already existed on the cluster used), a measured first-ingest index delay (the delay described above is expected behavior), a different machine or a cold Docker cache, GPUs other than the RTX 4060, other browsers, and sustained or concurrent load.
 
@@ -191,9 +191,9 @@ Not verified: automatic creation of the vector index (the index already existed 
 
 To put the stack on a public website, see [Put the assistant on your website](../README.md#put-the-assistant-on-your-website) in the main README. For a longer troubleshooting guide, see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md); [`architecture.svg`](architecture.svg) is a diagram of the services. Quick answers:
 
-- `Set MODEL_GGUF_DIR` or similar: `.env.compose.local` is missing or incomplete; pass `--env-file .env.compose.local`.
+- `Set MODEL_GGUF_DIR` or similar: `.env` is missing or incomplete (or you ran Compose outside the repository root, where it cannot find `.env`).
 - `model-init` fails with "GGUF checksum mismatch": the file in `MODEL_GGUF_DIR` is not the one whose digest you configured.
-- `Set MONGODB_URI to your Atlas connection string`: the variable is missing from `.env.compose.local`; rerun `setup_stack.py` with a new `--output` or add the line by hand.
+- `Set MONGODB_URI to your Atlas connection string`: the variable is missing from `.env`; rerun `setup_stack.py` with a new `--output` or add the line by hand.
 - Gateway stays unhealthy: check `docker compose logs gateway`. Usual causes are an Atlas network access rule that excludes this machine, wrong credentials, or a vector index that is still building (first start) or missing because the Atlas user may not create search indexes.
 - `ollama` fails to start with a device error: the NVIDIA Container Toolkit is not installed or not configured for Docker.
 - Dashboard cannot reach the gateway: `NEXT_PUBLIC_GATEWAY_URL` and `ALLOWED_ORIGINS` must match the addresses used in the browser; rebuild the dashboard after changing the former.

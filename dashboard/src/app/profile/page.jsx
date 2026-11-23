@@ -2,8 +2,12 @@
 
 /**
  * Profile route ("/profile"): edits business identity, validated public contact details, allowed
- * widget origins and the agent runtime config (Business Instructions, tone, temperature, context
- * chunks, similarity threshold). The core assistant policy is shown read-only; save payloads are
+ * widget origins, the opt-in conversation-recording switch and the agent runtime config (Business
+ * Instructions, tone, temperature, context chunks, similarity threshold). The form loads from
+ * GET /api/tenants/:id/config for the active tenant and saves with PUT to the same URL; the page
+ * keeps a savedSnapshot to detect unsaved edits and to power "Discard Changes". The core assistant
+ * policy shows the default until the admin
+ * confirms a warning and edits it (reset to default removes the override); save payloads are
  * built by src/lib/profile.mjs so server-owned fields are never written back.
  */
 
@@ -13,9 +17,10 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useTenant } from "@/context/TenantContext";
 import { fetchTenantConfig, updateTenantConfig } from "@/lib/api";
 import ConfigSlider from "@/components/ConfigSlider";
+import { Switch } from "@/components/ui/switch";
 import { DEFAULT_AGENT_TONE, TONE_PRESETS } from "@/lib/agentDefaults.mjs";
 import { originsToText } from "@/lib/origins.mjs";
-import { profilePayload, readAssistantPolicy } from "@/lib/profile.mjs";
+import { defaultAgentConfig, profilePayload, readAssistantPolicy } from "@/lib/profile.mjs";
 
 const INITIAL_FORM = {
     tenant_id: "",
@@ -28,8 +33,12 @@ const INITIAL_FORM = {
     team_name: "",
     // One origin per line, as typed (widget_config.allowed_origins).
     allowed_origins: "",
+    // Opt-in research log of chat turns; off unless an admin turns it on.
+    record_conversations: false,
     agent_config: {
         system_prompt: "",
+        // "" means the shipped default core policy applies.
+        core_policy: "",
         agent_tone: DEFAULT_AGENT_TONE,
         temperature: 0.2,
         max_context_chunks: 4,
@@ -38,6 +47,8 @@ const INITIAL_FORM = {
     updated_at: null,
 };
 
+// Maps the gateway's business document to form state. The fallbacks match the gateway's defaults,
+// so an older document missing a field still renders; the phone is split into number and extension.
 function normalizeDocToForm(doc) {
     const phone = splitContactPhone(doc?.contact_phone || "");
     return {
@@ -50,8 +61,10 @@ function normalizeDocToForm(doc) {
         assistant_policy: readAssistantPolicy(doc),
         team_name: doc?.team_name || "",
         allowed_origins: originsToText(doc?.widget_config?.allowed_origins),
+        record_conversations: doc?.record_conversations === true,
         agent_config: {
             system_prompt: doc?.agent_config?.system_prompt || "",
+            core_policy: doc?.agent_config?.core_policy || "",
             agent_tone: doc?.agent_config?.agent_tone || DEFAULT_AGENT_TONE,
             temperature:
                 typeof doc?.agent_config?.temperature === "number"
@@ -70,6 +83,7 @@ function normalizeDocToForm(doc) {
     };
 }
 
+/** Page component, no props; edits the active tenant from TenantContext. */
 export default function ProfilePage() {
     const {
         activeTenantId,
@@ -86,6 +100,10 @@ export default function ProfilePage() {
     const touchContact = (field) => setContactTouched((prev) => ({ ...prev, [field]: true }));
     const [loadError, setLoadError] = useState(null);
     const [toast, setToast] = useState(null);
+    // The core policy stays locked until the admin confirms the warning.
+    const [policyUnlocked, setPolicyUnlocked] = useState(false);
+    const [showPolicyWarning, setShowPolicyWarning] = useState(false);
+    const [showDefaultsWarning, setShowDefaultsWarning] = useState(false);
 
     const showToast = useCallback((type, title, message) => {
         setToast({ type, title, message, id: Date.now() });
@@ -99,6 +117,8 @@ export default function ProfilePage() {
         return () => clearTimeout(timer);
     }, [toast]);
 
+    // Manual reload for the error banner's Retry button; the effect below does the automatic load
+    // when the active tenant changes (and also re-locks the policy editor).
     const loadActiveTenantConfig = useCallback(async (tenantId) => {
         if (!tenantId) return;
         setLoadingConfig(true);
@@ -122,6 +142,7 @@ export default function ProfilePage() {
         let cancelled = false;
 
         async function fetchConfigForTenant() {
+            // Deferring one microtask keeps the setState calls below out of the effect's synchronous body.
             await Promise.resolve();
             if (cancelled) return;
             setLoadingConfig(true);
@@ -130,6 +151,7 @@ export default function ProfilePage() {
                 const doc = await fetchTenantConfig(activeTenantId);
                 if (!cancelled) {
                     const normalized = normalizeDocToForm(doc);
+                    setPolicyUnlocked(false);
                     setForm(normalized);
                     setSavedSnapshot(normalized);
                 }
@@ -170,8 +192,40 @@ export default function ProfilePage() {
         }));
     };
 
+    const defaultPolicyText = form.assistant_policy?.system_prompt || "";
+    // Shown text: the tenant's override, or the shipped default when none is set.
+    const policyText = form.agent_config.core_policy || defaultPolicyText;
+    const policyIsCustom = policyText.trim() !== defaultPolicyText.trim();
+
+    const unlockPolicy = () => {
+        // Start the edit from the text currently in effect so nothing is lost.
+        handleAgentConfigChange("core_policy", policyText);
+        setPolicyUnlocked(true);
+        setShowPolicyWarning(false);
+    };
+
+    // Takes effect on Save, like every other field; Discard Changes undoes it before then.
+    const resetPolicyToDefault = () => {
+        handleAgentConfigChange("core_policy", "");
+        setPolicyUnlocked(false);
+    };
+
+    // Fills the agent settings with a new business's defaults. Like every other edit it is only
+    // stored on Save, and Discard Changes undoes it.
+    const applyAgentDefaults = () => {
+        setForm((prev) => ({ ...prev, agent_config: defaultAgentConfig(prev) }));
+        setPolicyUnlocked(false);
+        setShowDefaultsWarning(false);
+        showToast(
+            "info",
+            "Defaults Applied",
+            "Agent settings are back to their defaults. Save Configuration to keep them, or Discard Changes to undo."
+        );
+    };
+
     const handleReset = () => {
         setForm(savedSnapshot);
+        setPolicyUnlocked(false);
         setContactTouched({});
         showToast(
             "info",
@@ -197,6 +251,7 @@ export default function ProfilePage() {
             const normalized = normalizeDocToForm(updatedDoc);
             setForm(normalized);
             setSavedSnapshot(normalized);
+            setPolicyUnlocked(false);
             updateTenantInList(updatedDoc);
 
             showToast(
@@ -215,6 +270,8 @@ export default function ProfilePage() {
         }
     };
 
+    // Compares only the editable fields; tenant_id, the read-only assistant_policy and updated_at
+    // never change through the form, so they are left out.
     const hasUnsavedChanges =
         JSON.stringify({
             name: form.name,
@@ -224,6 +281,7 @@ export default function ProfilePage() {
             contact_phone_extension: form.contact_phone_extension,
             team_name: form.team_name,
             allowed_origins: form.allowed_origins,
+            record_conversations: form.record_conversations,
             agent_config: form.agent_config,
         }) !==
         JSON.stringify({
@@ -234,8 +292,21 @@ export default function ProfilePage() {
             contact_phone_extension: savedSnapshot.contact_phone_extension,
             team_name: savedSnapshot.team_name,
             allowed_origins: savedSnapshot.allowed_origins,
+            record_conversations: savedSnapshot.record_conversations,
             agent_config: savedSnapshot.agent_config,
         });
+
+    // Ask the browser to confirm before a reload or tab close throws away unsaved edits.
+    // (Navigating with the sidebar is a client-side route change, which this cannot intercept.)
+    useEffect(() => {
+        if (!hasUnsavedChanges) return;
+        const warnBeforeLeaving = (event) => {
+            event.preventDefault();
+            event.returnValue = "";
+        };
+        window.addEventListener("beforeunload", warnBeforeLeaving);
+        return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+    }, [hasUnsavedChanges]);
 
     return (
         <div className="min-h-full bg-zinc-950 text-zinc-100">
@@ -244,7 +315,7 @@ export default function ProfilePage() {
                 <div
                     role="status"
                     aria-live="polite"
-                    className="fixed bottom-5 right-5 z-50 max-w-md"
+                    className="fixed bottom-4 sm:bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-50 sm:max-w-md"
                 >
                     <div
                         className={`rounded border p-3.5 text-sm ${
@@ -264,10 +335,10 @@ export default function ProfilePage() {
             )}
 
             {/* Page Header */}
-            <header className="bg-zinc-950 border-b border-zinc-800 px-6 py-4">
+            <header className="bg-zinc-950 border-b border-zinc-800 px-4 sm:px-6 py-4">
                 <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div>
-                        <div className="flex items-center gap-2.5">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                             <h1 className="text-lg font-semibold text-zinc-100">
                                 Tenant Profile & Runtime Configuration
                             </h1>
@@ -292,31 +363,13 @@ export default function ProfilePage() {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            onClick={handleReset}
-                            disabled={!hasUnsavedChanges || saving || loadingConfig}
-                            className="rounded border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                        >
-                            Reset
-                        </button>
-                        <button
-                            type="submit"
-                            form="tenant-profile-form"
-                            disabled={saving || loadingConfig || !activeTenantId}
-                            className="rounded bg-zinc-100 hover:bg-white px-3.5 py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
-                        >
-                            {saving ? "Saving..." : "Save Configuration"}
-                        </button>
-                    </div>
                 </div>
             </header>
 
             {/* Main Content */}
-            <main className="max-w-5xl mx-auto px-6 py-6">
+            <main className="max-w-5xl mx-auto px-4 sm:px-6 py-5 sm:py-6">
                 {loadError && (
-                    <div className="mb-6 rounded border border-red-900 bg-red-950/50 p-4 flex items-center justify-between gap-4 text-red-200">
+                    <div className="mb-6 rounded border border-red-900 bg-red-950/50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 text-red-200">
                         <div className="text-sm">
                             <p className="font-medium">Failed to load tenant configuration</p>
                             <p className="text-xs text-red-300 mt-0.5">{loadError}</p>
@@ -324,7 +377,7 @@ export default function ProfilePage() {
                         <button
                             type="button"
                             onClick={() => loadActiveTenantConfig(activeTenantId)}
-                            className="rounded border border-red-800 bg-red-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-800"
+                            className="shrink-0 rounded border border-red-800 bg-red-900 px-3 py-2 sm:py-1.5 text-xs font-medium text-white hover:bg-red-800"
                         >
                             Retry
                         </button>
@@ -344,7 +397,7 @@ export default function ProfilePage() {
                     <form id="tenant-profile-form" onSubmit={handleSave} className="space-y-6">
                         {/* Card 1: Business Identity */}
                         <section className="rounded border border-zinc-800 bg-zinc-950">
-                            <div className="border-b border-zinc-800 px-5 py-3.5 flex items-center justify-between bg-zinc-900/40">
+                            <div className="border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 bg-zinc-900/40">
                                 <div>
                                     <h2 className="text-sm font-semibold text-zinc-100">
                                         Business Identity
@@ -362,7 +415,7 @@ export default function ProfilePage() {
                                 </div>
                             </div>
 
-                            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="p-4 sm:p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {/* Business Name */}
                                 <div>
                                     <label
@@ -436,7 +489,28 @@ export default function ProfilePage() {
                                     ) : null}
                                 </div>
 
+                                {/* Team / Admin Name: sits beside Support Email so the short fields pair up */}
                                 <div>
+                                    <label
+                                        htmlFor="team-name"
+                                        className="block text-xs font-medium text-zinc-300 mb-1.5"
+                                    >
+                                        Team / Admin Name
+                                    </label>
+                                    <input
+                                        id="team-name"
+                                        type="text"
+                                        value={form.team_name}
+                                        onChange={(e) =>
+                                            handleIdentityChange("team_name", e.target.value)
+                                        }
+                                        placeholder="Outfitter Support Team"
+                                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                                    />
+                                </div>
+
+                                {/* Phone + extension: the tallest block, so it gets its own full row */}
+                                <div className="md:col-span-2 md:max-w-xl">
                                     <label htmlFor="contact-phone" className="block text-xs font-medium text-zinc-300 mb-1.5">
                                         Public Support Phone (optional)
                                     </label>
@@ -477,32 +551,12 @@ export default function ProfilePage() {
                                         Visitors may see this number for direct contact. Email follow-up is not immediate assistance.
                                     </p>
                                 </div>
-
-                                {/* Team / Admin Name */}
-                                <div>
-                                    <label
-                                        htmlFor="team-name"
-                                        className="block text-xs font-medium text-zinc-300 mb-1.5"
-                                    >
-                                        Team / Admin Name
-                                    </label>
-                                    <input
-                                        id="team-name"
-                                        type="text"
-                                        value={form.team_name}
-                                        onChange={(e) =>
-                                            handleIdentityChange("team_name", e.target.value)
-                                        }
-                                        placeholder="Outfitter Support Team"
-                                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-100 focus:border-zinc-600 focus:outline-none"
-                                    />
-                                </div>
                             </div>
                         </section>
 
                         {/* Card: Chat widget allowed origins */}
                         <section className="rounded border border-zinc-800 bg-zinc-950">
-                            <div className="border-b border-zinc-800 px-5 py-3.5 bg-zinc-900/40">
+                            <div className="border-b border-zinc-800 px-4 sm:px-5 py-3.5 bg-zinc-900/40">
                                 <h2 className="text-sm font-semibold text-zinc-100">
                                     Chat Widget: Allowed Origins
                                 </h2>
@@ -510,7 +564,7 @@ export default function ProfilePage() {
                                     Websites that may embed this tenant&apos;s chat widget.
                                 </p>
                             </div>
-                            <div className="p-5">
+                            <div className="p-4 sm:p-5">
                                 <label
                                     htmlFor="allowed-origins"
                                     className="block text-xs font-medium text-zinc-300 mb-1.5"
@@ -540,7 +594,7 @@ export default function ProfilePage() {
 
                         {/* Card 2: AI Agent Configuration */}
                         <section className="rounded border border-zinc-800 bg-zinc-950">
-                            <div className="border-b border-zinc-800 px-5 py-3.5 flex items-center justify-between bg-zinc-900/40">
+                            <div className="border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 bg-zinc-900/40">
                                 <div>
                                     <h2 className="text-sm font-semibold text-zinc-100">
                                         AI Agent Configuration
@@ -549,36 +603,191 @@ export default function ProfilePage() {
                                         Core policy, business instructions, tone, and retrieval settings.
                                     </p>
                                 </div>
-                                <span className="font-mono text-xs text-zinc-400">
-                                    Llama-3.2-3B-Instruct
-                                </span>
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowDefaultsWarning(true)}
+                                        className="rounded border border-zinc-700 px-2.5 py-1.5 sm:py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+                                    >
+                                        Set to defaults
+                                    </button>
+                                    <span className="font-mono text-xs text-zinc-400">
+                                        Llama-3.2-3B-Instruct
+                                    </span>
+                                </div>
+                                {showDefaultsWarning && (
+                                    <div
+                                        role="alertdialog"
+                                        aria-modal="true"
+                                        aria-labelledby="defaults-warning-title"
+                                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+                                    >
+                                        <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded border border-amber-700 bg-zinc-950 p-4 sm:p-5">
+                                            <h3 id="defaults-warning-title" className="text-sm font-semibold text-amber-300">
+                                                Set all agent settings to defaults?
+                                            </h3>
+                                            <p className="mt-3 text-xs text-zinc-300">This will replace:</p>
+                                            <ul className="mt-1.5 list-disc space-y-1 pl-5 text-xs text-zinc-300">
+                                                <li>
+                                                    <strong>Business Instructions</strong> with the generated text built from
+                                                    your business name, industry and contact email. Your current text will be lost.
+                                                </li>
+                                                <li>
+                                                    <strong>Core Assistant Policy</strong> with the shipped default (any custom
+                                                    policy is removed).
+                                                </li>
+                                                <li>
+                                                    <strong>Agent Tone</strong> with &quot;{defaultAgentConfig(form).agent_tone}&quot;.
+                                                </li>
+                                                <li>
+                                                    <strong>Temperature, context chunks and similarity threshold</strong> with
+                                                    {" "}{defaultAgentConfig(form).temperature}, {defaultAgentConfig(form).max_context_chunks} and{" "}
+                                                    {defaultAgentConfig(form).similarity_threshold}.
+                                                </li>
+                                            </ul>
+                                            <p className="mt-3 text-xs text-zinc-400">
+                                                Not changed: business name, industry, contact details, allowed widget origins,
+                                                your documents and your account.
+                                            </p>
+                                            <p className="mt-2 text-xs text-zinc-400">
+                                                The new values appear in the form but are not saved until you click Save
+                                                Configuration. Discard Changes undoes them.
+                                            </p>
+                                            <div className="mt-5 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowDefaultsWarning(false)}
+                                                    className="rounded border border-zinc-700 px-3 py-2.5 sm:py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+                                                >
+                                                    Cancel
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={applyAgentDefaults}
+                                                    className="rounded bg-amber-600 px-3 py-2.5 sm:py-1.5 text-xs font-medium text-black hover:bg-amber-500"
+                                                >
+                                                    Set to defaults
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
-                            <div className="p-5 space-y-5">
+                            <div className="p-4 sm:p-5 space-y-5">
                                 <div>
-                                    <label htmlFor="assistant-policy" className="block text-xs font-medium text-zinc-300 mb-1.5">
-                                        Core Assistant Policy (read-only)
-                                    </label>
+                                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 mb-1.5">
+                                        <label htmlFor="assistant-policy" className="text-xs font-medium text-zinc-300">
+                                            Core Assistant Policy{" "}
+                                            {policyUnlocked ? "(editing)" : policyIsCustom ? "(customized)" : "(default)"}
+                                        </label>
+                                        {form.assistant_policy && (
+                                            <div className="flex items-center gap-2">
+                                                {!policyUnlocked && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowPolicyWarning(true)}
+                                                        className="rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+                                                    >
+                                                        Edit policy
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={resetPolicyToDefault}
+                                                    disabled={!policyIsCustom}
+                                                    className="rounded border border-zinc-700 px-2.5 py-1 text-xs text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+                                                >
+                                                    Reset to default
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
                                     {form.assistant_policy ? (
                                         <>
-                                            <p className="text-xs text-zinc-500 mb-2">Version {form.assistant_policy.version}</p>
+                                            <p className="text-xs text-zinc-500 mb-2">
+                                                Default version {form.assistant_policy.version}
+                                                {policyUnlocked || policyIsCustom
+                                                    ? ` · ${policyText.length} chars`
+                                                    : ""}
+                                            </p>
                                             <textarea
                                                 id="assistant-policy"
-                                                readOnly
+                                                readOnly={!policyUnlocked}
                                                 rows={12}
-                                                value={form.assistant_policy.system_prompt}
-                                                className="w-full bg-zinc-900 border border-zinc-800 rounded px-3 py-2 font-mono text-xs leading-relaxed text-zinc-300 focus:border-zinc-600 focus:outline-none"
+                                                maxLength={8000}
+                                                value={policyText}
+                                                onChange={(e) =>
+                                                    handleAgentConfigChange("core_policy", e.target.value)
+                                                }
+                                                className={`w-full rounded px-3 py-2 font-mono text-xs leading-relaxed focus:outline-none ${
+                                                    policyUnlocked
+                                                        ? "bg-zinc-900 border border-amber-700 text-zinc-100 focus:border-amber-500"
+                                                        : "bg-zinc-900 border border-zinc-800 text-zinc-300 focus:border-zinc-600"
+                                                }`}
                                             />
                                         </>
                                     ) : (
                                         <p id="assistant-policy" className="text-xs text-amber-300">
-                                            The gateway did not provide its core policy. Update the gateway to view the active policy here.
+                                            The gateway did not provide its core policy. Update the gateway to view or edit the active policy here.
                                         </p>
                                     )}
                                     <p className="mt-1 text-xs text-zinc-500">
-                                        Managed by the application. Requires grounded answers, human follow-up when needed,
-                                        and accurate contact guidance. Business settings cannot override this policy.
+                                        The default requires grounded answers, human follow-up when needed, and accurate
+                                        contact guidance, and is written for a small business. You can replace it if it does
+                                        not fit your site. Changes apply when you save; reset to default restores the original text.
                                     </p>
+                                    {showPolicyWarning && (
+                                        <div
+                                            role="alertdialog"
+                                            aria-modal="true"
+                                            aria-labelledby="policy-warning-title"
+                                            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+                                        >
+                                            <div className="w-full max-w-md max-h-[90dvh] overflow-y-auto rounded border border-amber-700 bg-zinc-950 p-4 sm:p-5">
+                                                <h3 id="policy-warning-title" className="text-sm font-semibold text-amber-300">
+                                                    Edit the core policy?
+                                                </h3>
+                                                <ul className="mt-3 list-disc space-y-1.5 pl-5 text-xs text-zinc-300">
+                                                    <li>
+                                                        This is the main instruction the assistant follows. Weak or contradictory
+                                                        wording can make answers worse or ungrounded.
+                                                    </li>
+                                                    <li>
+                                                        The default tells the model to answer only from your documents and never
+                                                        invent facts. Removing that can cause made-up answers.
+                                                    </li>
+                                                    <li>
+                                                        The model was fine-tuned on the default wording, so a small 3B model may
+                                                        follow a heavily rewritten policy less reliably.
+                                                    </li>
+                                                    <li>
+                                                        Replies are still returned in the required JSON format, and promises to
+                                                        transfer or email on your behalf are still blocked.
+                                                    </li>
+                                                    <li>
+                                                        You can always use &quot;Reset to default&quot; to restore the original.
+                                                    </li>
+                                                </ul>
+                                                <div className="mt-5 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowPolicyWarning(false)}
+                                                        className="rounded border border-zinc-700 px-3 py-2.5 sm:py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={unlockPolicy}
+                                                        className="rounded bg-amber-600 px-3 py-2.5 sm:py-1.5 text-xs font-medium text-black hover:bg-amber-500"
+                                                    >
+                                                        I understand, edit policy
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Business Instructions Editor */}
@@ -727,39 +936,96 @@ export default function ProfilePage() {
                                 </div>
                             </div>
 
-                            {/* Bottom Action Bar */}
-                            <div className="border-t border-zinc-800 bg-zinc-900/40 px-5 py-3.5 flex items-center justify-between">
-                                <div className="font-mono text-xs text-zinc-400">
-                                    {hasUnsavedChanges ? (
-                                        <span className="text-amber-400">
-                                            status: unsaved_changes
-                                        </span>
-                                    ) : (
-                                        <span>
-                                            status: synced (businesses)
-                                        </span>
-                                    )}
-                                </div>
+                        </section>
 
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={handleReset}
-                                        disabled={!hasUnsavedChanges || saving}
-                                        className="rounded border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-                                    >
-                                        Discard Changes
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={saving || !activeTenantId}
-                                        className="rounded bg-zinc-100 hover:bg-white px-4 py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
-                                    >
-                                        {saving ? "Saving..." : "Save Configuration"}
-                                    </button>
+                        {/* Card: Conversation recording (opt-in research log) */}
+                        <section className="rounded border border-zinc-800 bg-zinc-950">
+                            <div className="border-b border-zinc-800 px-4 sm:px-5 py-3.5 bg-zinc-900/40">
+                                <h2 className="text-sm font-semibold text-zinc-100">
+                                    Conversation Recording
+                                </h2>
+                                <p className="text-xs text-zinc-400">
+                                    Optionally keep every chat turn, including ones that are not escalated, for review and research.
+                                </p>
+                            </div>
+                            <div className="p-4 sm:p-5 space-y-3">
+                                <div className="flex items-start gap-3">
+                                    <Switch
+                                        id="record-conversations"
+                                        checked={form.record_conversations}
+                                        onCheckedChange={(value) =>
+                                            handleIdentityChange("record_conversations", value)
+                                        }
+                                        className="mt-1"
+                                    />
+                                    <label htmlFor="record-conversations" className="cursor-pointer text-sm text-zinc-200">
+                                        Record conversations with the assistant
+                                        <span className="block text-xs text-zinc-400 mt-0.5">
+                                            Off by default. Takes effect when you save.
+                                        </span>
+                                    </label>
+                                </div>
+                                <div className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2.5 text-xs text-zinc-300 space-y-1.5">
+                                    <p>
+                                        <strong>Visitors are told.</strong> While this is on, the chat widget shows
+                                        &quot;This conversation is recorded to improve the assistant.&quot; A message is
+                                        only recorded if the widget showed that notice, so older cached copies of
+                                        the widget are never recorded.
+                                    </p>
+                                    <p>
+                                        <strong>Stored per message:</strong> the question (e-mail addresses and phone-like
+                                        numbers replaced), the answer, action, confidence, cited and retrieved document
+                                        ids with scores, response time, and the settings in force.
+                                    </p>
+                                    <p>
+                                        <strong>Not stored:</strong> IP address, browser details, the visitor&apos;s session id,
+                                        document text, or contact details left in the follow-up form.
+                                    </p>
+                                    <p className="text-zinc-400">
+                                        Records are kept until you delete them. Export them with
+                                        scripts/export_conversations.py.
+                                    </p>
                                 </div>
                             </div>
                         </section>
+
+                        {/* Action bar: stays at the bottom of the screen while the form is on screen, so
+                            Save is always reachable (long forms, phones) and unsaved edits are visible. */}
+                        <div
+                            className={`sticky bottom-0 z-30 rounded border px-4 sm:px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-[0_-8px_16px_rgba(0,0,0,0.4)] ${
+                                hasUnsavedChanges
+                                    ? "border-amber-700 bg-zinc-950"
+                                    : "border-zinc-800 bg-zinc-950"
+                            }`}
+                        >
+                            <div className="font-mono text-xs text-zinc-400" role="status">
+                                {hasUnsavedChanges ? (
+                                    <span className="text-amber-400">
+                                        Unsaved changes. Save Configuration to keep them.
+                                    </span>
+                                ) : (
+                                    <span>status: synced (businesses)</span>
+                                )}
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleReset}
+                                    disabled={!hasUnsavedChanges || saving || loadingConfig}
+                                    className="rounded border border-zinc-800 bg-zinc-900 px-3 py-2.5 sm:py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                                >
+                                    Discard Changes
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={saving || loadingConfig || !activeTenantId}
+                                    className="rounded bg-zinc-100 hover:bg-white px-4 py-2.5 sm:py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+                                >
+                                    {saving ? "Saving..." : "Save Configuration"}
+                                </button>
+                            </div>
+                        </div>
                     </form>
                 )}
             </main>

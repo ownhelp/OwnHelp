@@ -26,6 +26,8 @@ import {
 
 const AuthContext = createContext(null);
 
+// localStorage key for the remembered active tenant; TenantContext reads and writes the same keys.
+// preset_training uses its own key so demo and standard selections never mix.
 function getStorageKey(appMode) {
     return appMode === "preset_training"
         ? "capstone_demo_active_tenant_id"
@@ -80,6 +82,8 @@ export function AuthProvider({ children }) {
         }
     }, []);
 
+    // api.js calls this on any 401 from a protected endpoint, so an expired session drops the user
+    // back to the login screen (AppShell redirects once authenticated becomes false).
     useEffect(() => {
         registerUnauthorizedHandler(() => {
             clearSessionState();
@@ -93,6 +97,7 @@ export function AuthProvider({ children }) {
         let cancelled = false;
 
         async function bootstrapAuth() {
+            // Deferring one microtask keeps the setState calls below out of the effect's synchronous body.
             await Promise.resolve();
             if (cancelled) return;
 
@@ -178,6 +183,7 @@ export function AuthProvider({ children }) {
         }
     }, [clearSessionState]);
 
+    // Only a complete session user counts; a partial payload must not pass the route guard.
     const authenticated = Boolean(user && user.user_id && user.tenant_id);
 
     return (

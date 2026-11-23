@@ -51,6 +51,8 @@ class AgentConfig(BaseModel):
     """Per-tenant runtime configuration (businesses.agent_config)."""
 
     system_prompt: str = Field(default="", max_length=4000)
+    # Optional replacement for the default core policy; blank uses the shipped default.
+    core_policy: str = Field(default="", max_length=8000)
     agent_tone: str = Field(default="", max_length=200)
     temperature: float = Field(default=0.2, ge=0.0, le=1.0)
     max_context_chunks: int = Field(default=4, ge=1, le=8)
@@ -84,8 +86,8 @@ class ChatServiceRequest(BaseModel):
 
 
 def build_system_prompt(config: AgentConfig) -> str:
-    """Tenant instructions are customization, never a replacement for core policy."""
-    return build_policy_prompt(config.system_prompt, config.agent_tone)
+    """Tenant instructions extend the core policy; a tenant may also replace the core itself."""
+    return build_policy_prompt(config.system_prompt, config.agent_tone, config.core_policy)
 
 
 class ChatOrchestrator:

@@ -44,7 +44,8 @@ class SupportInferenceClient:
         if env_file:
             load_dotenv(dotenv_path=env_file, override=False)
         else:
-            load_dotenv(find_dotenv(usecwd=True), override=False)
+            # ".env" is the Docker stack's file, so look for the development file by name.
+            load_dotenv(find_dotenv(".env.dev", usecwd=True), override=False)
 
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3.2:3b")
         self.client = Client(host=host or os.getenv("OLLAMA_HOST", "http://localhost:11434"))
@@ -69,6 +70,8 @@ class SupportInferenceClient:
         """Runs schema-constrained generation and returns the raw JSON text plus timing metrics.
 
         The JSON schema is enforced at decode time by Ollama, so the text should always parse.
+        Uses the default core ``SYSTEM_PROMPT`` with no tenant customization: this is the evaluation
+        path. Live chat builds its own per-tenant messages in ``ChatOrchestrator.stream``.
         """
         result = self.client.chat(
             model=self.model,

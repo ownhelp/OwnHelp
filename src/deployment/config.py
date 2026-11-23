@@ -67,7 +67,8 @@ def file_sha256(path: Path) -> str:
 def configure_stack(model_dir: Path, expected_sha256: str, output: Path, mongodb_uri: str) -> Path:
     """Verify the source artifact and URI, then create, never replace, a mode-0600 env file.
 
-    Existing .env files and source model files are never modified, and configuration values
+    An existing output file (including a development .env that should be renamed .env.dev) and
+    source model files are never modified, and configuration values
     (including the Atlas URI) are not returned for logging.
     """
     mongodb_uri = validate_mongodb_uri(mongodb_uri)

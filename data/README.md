@@ -31,7 +31,7 @@ Every tenant, including the secret demo business, is ingested into the same stru
 }
 ```
 
-- `doc_id` is the file name without its extension.
+- `doc_id` is the file name without its extension (legacy parser) or the path relative to the tenant directory (the default structured parser, which also stores provenance fields such as `source_sha256`; see `src/rag/ingestor.py`).
 - For Markdown, `section` is the nearest H1 to H3 heading above the chunk.
 - For JSON, each top-level key or list item becomes its own section.
 - `embedding` has 384 dimensions (`BAAI/bge-small-en-v1.5`).

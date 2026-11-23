@@ -60,6 +60,8 @@ async function readHttpError(response) {
  * @param {string} options.tenantId Tenant to chat with.
  * @param {string} options.message Visitor message (the gateway allows at most 2000 characters).
  * @param {string} options.sessionId Visitor session id, see `getSessionId`.
+ * @param {boolean} [options.recordingNotice=false] Set only when the recording notice is on screen;
+ *   the gateway records a turn only when this is true and the business opted in.
  * @param {AbortSignal} [options.signal] Cancels the request (rejects with code `aborted`).
  * @param {(text: string) => void} [options.onToken] Called with each text delta as it arrives.
  * @param {number} [options.idleTimeoutMs=30000] Max silence before rejecting with `timeout`; 0 disables.
@@ -71,6 +73,7 @@ export async function streamChat({
     tenantId,
     message,
     sessionId,
+    recordingNotice = false,
     signal,
     onToken = () => {},
     idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
@@ -127,6 +130,7 @@ export async function streamChat({
                 tenant_id: tenantId,
                 message,
                 session_id: sessionId,
+                ...(recordingNotice === true ? { recording_notice: true } : {}),
             }),
             signal: controller.signal,
         });
@@ -212,6 +216,34 @@ export async function streamChat({
         if (signal) {
             signal.removeEventListener("abort", onCallerAbort);
         }
+    }
+}
+
+/**
+ * Asks the gateway whether this business records conversations (`GET {apiUrl}/api/chat?tenant_id=`).
+ * Resolves true only on an explicit `record_conversations: true`; any failure resolves false, so a
+ * lookup problem never shows a notice that is not backed by the gateway (and, because the notice
+ * flag is then not sent, nothing is recorded).
+ *
+ * @param {object} options
+ * @param {string} options.apiUrl Gateway base URL.
+ * @param {string} options.tenantId Tenant the widget is configured for.
+ * @param {AbortSignal} [options.signal] Cancels the request.
+ * @param {typeof fetch} [options.fetchImpl] Replacement for `fetch`.
+ * @returns {Promise<boolean>}
+ */
+export async function fetchRecordingNotice({ apiUrl, tenantId, signal, fetchImpl = (...args) => fetch(...args) }) {
+    try {
+        const response = await fetchImpl(`${chatUrl(apiUrl)}?tenant_id=${encodeURIComponent(tenantId)}`, {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            signal,
+        });
+        if (!response.ok) return false;
+        const body = await response.json();
+        return body?.record_conversations === true;
+    } catch {
+        return false;
     }
 }
 

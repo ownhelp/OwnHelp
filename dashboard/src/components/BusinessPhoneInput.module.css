@@ -58,7 +58,8 @@
 }
 @media (max-width: 420px) {
     .control {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+        /* Stack the country picker above the number so the country name is readable. */
+        grid-template-columns: minmax(0, 1fr);
         gap: 0.375rem;
     }
     .country,

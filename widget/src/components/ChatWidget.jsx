@@ -1,10 +1,11 @@
 // The chat UI component: launcher, panel, streaming replies, retry/stop, email follow-up form and
 // "New chat". All network access goes through lib/chatClient.js to the gateway's /api/chat.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { streamChat, submitContact } from "../lib/chatClient.js";
+import { fetchRecordingNotice, streamChat, submitContact } from "../lib/chatClient.js";
 import { getSessionId, newSessionId } from "../lib/session.js";
 import { contactMessage, isRetryable, visitorMessage } from "../lib/messages.js";
 import { contactLinks, createConversationScope } from "../lib/followUp.js";
+import { viewportBox } from "../lib/viewport.js";
 import { WIDGET_CSS } from "../styles.js";
 
 const MAX_MESSAGE_LENGTH = 2000;
@@ -14,6 +15,16 @@ let nextId = 0;
 function makeId() {
     nextId += 1;
     return `m${nextId}`;
+}
+
+// On touch devices focusing the input opens the on-screen keyboard, which would cover the
+// greeting before the visitor has read it. Only desktop-style pointers get automatic focus.
+function canAutoFocus() {
+    try {
+        return !window.matchMedia("(pointer: coarse)").matches;
+    } catch {
+        return true;
+    }
 }
 
 /**
@@ -64,6 +75,12 @@ export default function ChatWidget({
     const listRef = useRef(null);
     const inputRef = useRef(null);
     const lastUserTextRef = useRef("");
+    // Visible area not covered by the on-screen keyboard ({ top, height, keyboardOpen }); null
+    // means plain CSS sizing. Only used by the full-screen phone layout (see styles.js).
+    const [viewport, setViewport] = useState(null);
+    // True only after the gateway confirmed this business records chats. The notice is shown while
+    // it is true, and it is also what lets the gateway record a message (see fetchRecordingNotice).
+    const [recording, setRecording] = useState(false);
 
     // fresh=true ("New chat") mints a new persisted session id; fresh=false (tenant/API change)
     // just reloads the stored id for the current tenant. Server-side history and tickets stay.
@@ -83,26 +100,68 @@ export default function ChatWidget({
         setContactEmail("");
         setContactStatus("idle");
         setContactError("");
-        inputRef.current?.focus();
+        if (canAutoFocus()) inputRef.current?.focus();
     }, [tenantId, greeting]);
 
     // Invalidate old callbacks before a changed tenant/API can display their results.
     useLayoutEffect(() => { resetConversation(false); }, [tenantId, apiUrl]);
 
+    const keyboardOpen = Boolean(viewport?.keyboardOpen);
+
+    // Also re-run when the keyboard opens or closes, so the newest message stays in view.
     useEffect(() => {
         const el = listRef.current;
         if (el) {
             el.scrollTop = el.scrollHeight;
         }
-    }, [messages, open]);
+    }, [messages, open, keyboardOpen]);
 
     useEffect(() => {
-        if (open && inputRef.current) {
+        if (open && inputRef.current && canAutoFocus()) {
             inputRef.current.focus();
         }
     }, [open]);
 
+    // Follow the visual viewport while the panel is open so the full-screen phone layout shrinks
+    // to the space above the keyboard instead of sliding under it. Read-only: nothing on the host
+    // page is changed.
+    useEffect(() => {
+        const vv = typeof window !== "undefined" ? window.visualViewport : null;
+        if (!open || !vv) {
+            setViewport(null);
+            return undefined;
+        }
+        const update = () =>
+            setViewport(
+                viewportBox({
+                    innerHeight: window.innerHeight,
+                    vvHeight: vv.height,
+                    vvOffsetTop: vv.offsetTop,
+                    vvScale: vv.scale,
+                })
+            );
+        update();
+        vv.addEventListener("resize", update);
+        vv.addEventListener("scroll", update);
+        return () => {
+            vv.removeEventListener("resize", update);
+            vv.removeEventListener("scroll", update);
+        };
+    }, [open]);
+
     useEffect(() => () => scopeRef.current.reset(), []);
+
+    // Learn whether chats are recorded as soon as the panel is first opened, before any message is
+    // sent. A failed lookup leaves `recording` false: no notice, and nothing is recorded.
+    useEffect(() => {
+        setRecording(false);
+        if (!open) return undefined;
+        const controller = new AbortController();
+        fetchRecordingNotice({ apiUrl, tenantId, signal: controller.signal, fetchImpl }).then((value) => {
+            if (!controller.signal.aborted) setRecording(value);
+        });
+        return () => controller.abort();
+    }, [open, apiUrl, tenantId, fetchImpl]);
 
     const patchMessage = useCallback((id, patch) => {
         setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
@@ -138,6 +197,8 @@ export default function ChatWidget({
                     tenantId,
                     message: trimmed,
                     sessionId,
+                    // Only true while the recording notice is on screen (see `recording`).
+                    recordingNotice: recording,
                     signal: controller.signal,
                     fetchImpl,
                     onToken: (token) => {
@@ -178,7 +239,7 @@ export default function ChatWidget({
                 }
             }
         },
-        [apiUrl, tenantId, sessionId, fetchImpl, patchMessage]
+        [apiUrl, tenantId, sessionId, fetchImpl, patchMessage, recording]
     );
 
     const retry = useCallback(() => {
@@ -228,11 +289,17 @@ export default function ChatWidget({
     };
     const links = contactLinks(followUp);
 
-    const rootStyle = accentColor ? { "--cw-accent": accentColor } : undefined;
+    const rootStyle = {
+        ...(accentColor ? { "--cw-accent": accentColor } : {}),
+        ...(open && viewport
+            ? { "--cw-vv-top": `${viewport.top}px`, "--cw-vv-height": `${viewport.height}px` }
+            : {}),
+    };
     const sideClass = position === "left" ? "cw-left" : "cw-right";
+    const stateClass = `${open ? " cw-open" : ""}${open && keyboardOpen ? " cw-kb" : ""}`;
 
     return (
-        <div className={`cw-root ${sideClass}`} style={rootStyle}>
+        <div className={`cw-root ${sideClass}${stateClass}`} style={rootStyle}>
             <style>{WIDGET_CSS}</style>
             {open ? (
                 <section className="cw-panel" role="dialog" aria-label={title}>
@@ -303,6 +370,11 @@ export default function ChatWidget({
                             </section>
                         ) : null}
                     </div>
+                    {recording ? (
+                        <div className="cw-notice" role="note">
+                            This conversation is recorded to improve the assistant.
+                        </div>
+                    ) : null}
                     <form className="cw-form" onSubmit={onSubmit}>
                         <input
                             ref={inputRef}

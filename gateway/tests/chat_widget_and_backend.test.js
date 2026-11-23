@@ -519,15 +519,17 @@ describe("chat helpers", () => {
         assert.deepEqual(
             buildAgentConfig({
                 system_prompt: "  hi  ",
+                core_policy: "  core  ",
                 agent_tone: 5,
                 temperature: 9,
                 max_context_chunks: 99,
                 similarity_threshold: -3,
             }),
-            { system_prompt: "hi", agent_tone: "", temperature: 1, max_context_chunks: 8, similarity_threshold: 0 }
+            { system_prompt: "hi", core_policy: "core", agent_tone: "", temperature: 1, max_context_chunks: 8, similarity_threshold: 0 }
         );
         assert.deepEqual(buildAgentConfig(null), {
             system_prompt: "",
+            core_policy: "",
             agent_tone: "",
             temperature: 0.2,
             max_context_chunks: 4,

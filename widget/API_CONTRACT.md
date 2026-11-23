@@ -3,8 +3,9 @@
 This is the contract between the embeddable widget (`widget/`) and the Orchestration Gateway.
 The real implementation is `gateway/src/routes/chat.js`. `widget/mock/mock_gateway.js` is an
 executable reference mock (no retrieval, no generation, no database), and
-`widget/tests/mock_gateway.test.js` checks the widget client against it. The mock does not
-enforce every gateway rule (session id format, per-tenant origins, body size); the real gateway does.
+`widget/tests/mock_gateway.test.js` checks the widget client against it. The mock mirrors the
+session id format, body size caps and origin check, but with one global origin allowlist instead of
+per-tenant origins, and it has no `GET /api/chat` recording-notice lookup; the real gateway has both.
 
 ## Request
 
@@ -27,6 +28,15 @@ Accept: text/event-stream, application/json
 | `tenant_id` | string | Required. Must match a `businesses.tenant_id`. Used as the `$vectorSearch` pre-filter. |
 | `message` | string | Required, non-empty, at most 2000 characters. |
 | `session_id` | string | Required. 16 to 128 characters from `A-Za-z0-9_.:-` (a UUID qualifies). Generated and stored by the widget (`localStorage`, per tenant). Not a credential; the gateway keys conversation history on it. |
+
+Optional field: `recording_notice` (boolean). The widget sends `true` only while its "This conversation is
+recorded" notice is on screen. A business that turned on conversation recording has a turn stored only
+when this is `true`, so a client that never showed the notice is never recorded. Any other value, or
+omitting it, means "not recorded".
+
+To learn whether to show that notice, the widget calls `GET /api/chat?tenant_id=example_tenant` first. It
+returns `{"record_conversations": true|false}` (same origin check and tenant rules as `POST`; `400`, `403`,
+`404` use the usual error shape). Treat any failure as `false`.
 
 The body is limited to 16 KB. The request carries **no cookies and no `Authorization` header**. It is a
 public, anonymous endpoint. The gateway answers CORS itself (`POST, OPTIONS`, `Content-Type` only, no
@@ -106,7 +116,8 @@ as a ticket in `ticket_logs`, in the schema the dashboard's review queue already
 
 The visitor gets the normal reply. When the ticket save succeeds, the gateway can offer email follow-up. One ticket exists per
 conversation: a further escalation updates it (and re-opens it if it was resolved) and keeps the admin's notes
-and contact details. Ordinary answered conversations are not written to the database. If saving the ticket
+and contact details. Ordinary answered conversations are not written to the database, unless the business
+opted in to conversation recording (see `recording_notice` above). If saving the ticket
 fails, the visitor's reply is unaffected and the failure is logged.
 
 ## Error responses (before streaming starts)

@@ -30,6 +30,8 @@ from pydantic import ValidationError
 
 from src.chat.orchestrator import ChatOrchestrator, ChatServiceRequest
 
+# Generous for a 2,000-character query plus 12 history turns of up to 8,000 characters each; anything
+# larger is not a legitimate gateway request.
 MAX_BODY_BYTES = 128_000
 TOKEN_HEADER = "X-Chat-Backend-Token"
 logger = logging.getLogger(__name__)
@@ -71,6 +73,7 @@ def make_handler(orchestrator, token: str = ""):
                 self._json(401, {"error": "Unauthorized."})
                 return
             try:
+                # A missing Content-Length reads as 0 and is rejected: chunked bodies are not supported.
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= MAX_BODY_BYTES:
                     self._json(413, {"error": "Request is empty or too large."})
@@ -101,16 +104,19 @@ def make_handler(orchestrator, token: str = ""):
     return ChatServiceHandler
 
 
-ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+# Local (non-Docker) development settings. The root ".env" belongs to the Docker stack (Compose reads
+# it automatically), so host-run tools read ".env.dev" instead. Inside Docker the settings arrive
+# through the container environment and this file does not exist.
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env.dev"
 
 
 def load_env(env_file=ENV_FILE):
-    """Loads the repository .env without overriding variables already set in the environment."""
+    """Loads the repository .env.dev without overriding variables already set in the environment."""
     return load_dotenv(env_file, override=False)
 
 
 def build_orchestrator():
-    """Builds the real retriever and Ollama client from the environment (.env or process env)."""
+    """Builds the real retriever and Ollama client from the environment (.env.dev or process env)."""
     from src.inference.client import SupportInferenceClient
     from src.rag.retriever import RAGRetriever
 

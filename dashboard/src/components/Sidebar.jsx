@@ -8,8 +8,6 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
 import {
     LayoutDashboard,
     Inbox,
@@ -23,10 +21,7 @@ import { useTenant } from "@/context/TenantContext";
 import { useAuth } from "@/context/AuthContext";
 import { fetchGatewayHealth } from "@/lib/api";
 import { describeVectorIndex, nextHealthPollDelay } from "@/lib/health.mjs";
-
-function cn(...inputs) {
-    return twMerge(clsx(inputs));
-}
+import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
     {
@@ -121,21 +116,16 @@ export default function Sidebar() {
 
     return (
         <>
-            {/* Mobile Top Header */}
-            <div className="lg:hidden flex items-center justify-between px-4 py-3 bg-zinc-950 border-b border-zinc-800 text-zinc-100 sticky top-0 z-40">
-                <div className="flex items-center gap-2">
-                    <span className="font-semibold text-sm text-zinc-100">
-                        Admin Console
-                    </span>
-                    <span className="font-mono text-xs text-zinc-400">
-                        [{activeTenantId || "loading"}]
-                    </span>
-                </div>
+            {/* Mobile Top Header: below lg the sidebar is an off-canvas drawer, so this bar (sticky, so the
+                menu stays reachable while the page scrolls) is its only entry point. The menu button sits
+                on the left, the same side the drawer slides in from. */}
+            <div className="lg:hidden flex items-center gap-3 px-4 py-3 bg-zinc-950 border-b border-zinc-800 text-zinc-100 sticky top-0 z-40">
                 <button
                     type="button"
                     onClick={() => setMobileOpen(!mobileOpen)}
-                    className="p-1.5 rounded border border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900"
+                    className="shrink-0 inline-flex h-10 w-10 items-center justify-center rounded border border-zinc-800 text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900"
                     aria-label="Toggle navigation menu"
+                    aria-expanded={mobileOpen}
                 >
                     {mobileOpen ? (
                         <X className="h-4 w-4" />
@@ -143,6 +133,14 @@ export default function Sidebar() {
                         <Menu className="h-4 w-4" />
                     )}
                 </button>
+                <div className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0 font-semibold text-sm text-zinc-100">
+                        Admin Console
+                    </span>
+                    <span className="truncate font-mono text-xs text-zinc-400">
+                        [{activeTenantId || "loading"}]
+                    </span>
+                </div>
             </div>
 
             {/* Mobile Overlay */}
@@ -153,10 +151,11 @@ export default function Sidebar() {
                 />
             )}
 
-            {/* Sidebar Container */}
+            {/* Sidebar Container: fixed drawer below lg (slid off-screen via -translate-x-full unless
+                mobileOpen); at lg+ it becomes a full-height sticky column beside the page content. */}
             <aside
                 className={cn(
-                    "fixed inset-y-0 left-0 z-50 w-64 bg-zinc-950 text-zinc-200 border-r border-zinc-800 flex flex-col lg:static lg:translate-x-0 lg:shrink-0",
+                    "fixed inset-y-0 left-0 z-50 w-[85vw] max-w-72 overflow-y-auto overscroll-contain transition-transform duration-200 bg-zinc-950 text-zinc-200 border-r border-zinc-800 flex flex-col lg:sticky lg:top-0 lg:h-dvh lg:self-start lg:w-64 lg:max-w-none lg:overflow-hidden lg:translate-x-0 lg:shrink-0",
                     mobileOpen ? "translate-x-0" : "-translate-x-full"
                 )}
             >
@@ -276,7 +275,7 @@ export default function Sidebar() {
                 </div>
 
                 {/* Primary Navigation Links */}
-                <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
+                <nav className="flex-1 min-h-0 px-3 py-3 space-y-1 overflow-y-auto">
                     {NAV_ITEMS.map((item) => {
                         const Icon = item.icon;
                         const isActive =
@@ -290,7 +289,7 @@ export default function Sidebar() {
                                 href={item.href}
                                 onClick={() => setMobileOpen(false)}
                                 className={cn(
-                                    "flex items-center gap-2.5 rounded px-3 py-2 text-sm transition-colors",
+                                    "flex items-center gap-2.5 rounded px-3 py-3 lg:py-2 text-sm transition-colors",
                                     isActive
                                         ? "bg-zinc-900 text-zinc-100 font-medium border border-zinc-800"
                                         : "text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200 border border-transparent"
@@ -304,7 +303,7 @@ export default function Sidebar() {
                 </nav>
 
                 {/* Authenticated Principal & Sign Out Footer */}
-                <div className="p-4 border-t border-zinc-800 space-y-3">
+                <div className="shrink-0 p-4 border-t border-zinc-800 space-y-3">
                     {user && (
                         <div className="rounded border border-zinc-800 bg-zinc-900/40 px-3 py-2">
                             <p className="text-xs font-medium text-zinc-200 truncate">
@@ -348,7 +347,7 @@ export default function Sidebar() {
                             type="button"
                             onClick={handleLogout}
                             disabled={loggingOut}
-                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-300 hover:text-zinc-100 disabled:opacity-50 cursor-pointer"
+                            className="shrink-0 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-2 lg:px-2.5 lg:py-1 font-mono text-xs text-zinc-300 hover:text-zinc-100 disabled:opacity-50 cursor-pointer"
                         >
                             {loggingOut ? "Signing out..." : "Sign Out"}
                         </button>

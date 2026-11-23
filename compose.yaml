@@ -4,14 +4,17 @@
 # your Atlas cluster.
 #
 #   python scripts/setup_stack.py --model-dir <dir with the GGUF> --model-sha256 <digest>
-#   docker compose --env-file .env.compose.local up -d --wait
+#   docker compose up -d --wait
+#
+# Compose reads the private configuration from the file named .env next to this file (written
+# by setup_stack.py), so no --env-file flag is needed. Host-run development uses .env.dev.
 #
 # Details: deployment/README.md.
 #
 # Startup order: ollama (healthy) -> model-init (one-shot GGUF import) -> chat-service -> gateway
 # -> dashboard. The gateway reports healthy only once Atlas is reachable and the vector index
 # exists and is queryable. Host ports are bound to 127.0.0.1 only. Required variables use
-# ${VAR:?message}, so Compose stops with a clear error if .env.compose.local is incomplete.
+# ${VAR:?message}, so Compose stops with a clear error if .env is incomplete.
 name: ownhelp
 
 # Environment shared by chat-service and gateway (merged with <<: *runtime-environment).
@@ -25,7 +28,9 @@ x-runtime-environment: &runtime-environment
   OLLAMA_HOST: http://ollama:11434
   OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b-qlora-hardneg-full01-q4}
   CHAT_BACKEND_TOKEN: ${CHAT_BACKEND_TOKEN:?Set CHAT_BACKEND_TOKEN}
+  # Fail a request after 5 s when Atlas is unreachable instead of the driver's 30 s default.
   MONGODB_SERVER_SELECTION_TIMEOUT_MS: "5000"
+  # Silences the HuggingFace tokenizers fork warning when ingestion subprocesses are spawned.
   TOKENIZERS_PARALLELISM: "false"
 
 services:
