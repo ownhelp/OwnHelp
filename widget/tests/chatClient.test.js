@@ -1,7 +1,7 @@
 // Protects streamChat/submitContact: request shape, SSE and JSON handling, error mapping, abort and idle timeout.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ChatError, streamChat } from "../src/lib/chatClient.js";
+import { ChatError, fetchRecordingNotice, streamChat } from "../src/lib/chatClient.js";
 
 const encoder = new TextEncoder();
 
@@ -44,6 +44,37 @@ test("sends the documented request", async () => {
         session_id: "s1",
     });
     assert.equal(captured.init.credentials, undefined);
+});
+
+test("the recording notice flag is sent only when the notice is on screen", async () => {
+    const bodies = [];
+    const fetchImpl = async (url, init) => {
+        bodies.push(JSON.parse(init.body));
+        return sseResponse(["event: done\ndata: {}\n\n"]);
+    };
+    await streamChat({ ...base, fetchImpl });
+    await streamChat({ ...base, recordingNotice: false, fetchImpl });
+    await streamChat({ ...base, recordingNotice: "yes", fetchImpl });
+    await streamChat({ ...base, recordingNotice: true, fetchImpl });
+    assert.deepEqual(bodies.map((body) => "recording_notice" in body), [false, false, false, true]);
+    assert.equal(bodies[3].recording_notice, true);
+});
+
+test("fetchRecordingNotice is true only on an explicit opt-in and fails closed", async () => {
+    let requested;
+    const answer = (body, status = 200) => async (url, init) => {
+        requested = { url, init };
+        return jsonResponse(body, status);
+    };
+    const options = { apiUrl: "http://gw.test/", tenantId: "my tenant" };
+    assert.equal(await fetchRecordingNotice({ ...options, fetchImpl: answer({ record_conversations: true }) }), true);
+    assert.equal(requested.url, "http://gw.test/api/chat?tenant_id=my%20tenant");
+    assert.equal(requested.init.method, "GET");
+    assert.equal(await fetchRecordingNotice({ ...options, fetchImpl: answer({ record_conversations: false }) }), false);
+    assert.equal(await fetchRecordingNotice({ ...options, fetchImpl: answer({ record_conversations: "true" }) }), false);
+    assert.equal(await fetchRecordingNotice({ ...options, fetchImpl: answer({}) }), false);
+    assert.equal(await fetchRecordingNotice({ ...options, fetchImpl: answer({ error: {} }, 403) }), false);
+    assert.equal(await fetchRecordingNotice({ ...options, fetchImpl: async () => { throw new Error("offline"); } }), false);
 });
 
 test("streams only the model's tokens, split across arbitrary chunk boundaries", async () => {

@@ -11,17 +11,21 @@ import React, { useState } from "react";
 import { useTenant } from "@/context/TenantContext";
 import { updateTenantChunk } from "@/lib/chunkApi";
 
-// Token budget of the embedding model; chunks above it are flagged because they get truncated.
+// Token budget of the embedding model; chunks above it are flagged (amber) because the model cannot
+// embed more than this, and the gateway rejects edits it cannot embed in full.
 const MAX_MODEL_TOKENS = 512;
 // Must match the gateway/worker limit; longer text is rejected there.
 const MAX_CHUNK_CHARS = 8000;
 
+// Rough client-side estimate (about 1.3 tokens per word) for the live counter while typing; the
+// gateway is the authority. Saved chunks show the server's own token_estimate instead.
 function estimateTokens(text) {
     const trimmed = (text || "").trim();
     const words = trimmed ? trimmed.split(/\s+/).length : 0;
     return Math.max(1, Math.ceil(words * 1.3));
 }
 
+// A chunk is identified by its document plus its position in it (no standalone chunk id is exposed).
 function chunkKey(chunk) {
     return `${chunk.doc_id}-${chunk.chunk_index}`;
 }
@@ -60,6 +64,13 @@ export default function ChunkExplorer({
         setActiveChunk(savedByKey[chunkKey(chunk)] || chunk);
         setEditing(false);
         setSaveError("");
+    }
+
+    function openChunkForEdit(chunk) {
+        const current = savedByKey[chunkKey(chunk)] || chunk;
+        openChunk(chunk);
+        setDraft(current.text || "");
+        setEditing(true);
     }
 
     function closeChunk() {
@@ -129,12 +140,12 @@ export default function ChunkExplorer({
                 </div>
 
                 {/* Filters */}
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
                     <select
                         aria-label="Filter chunks by document"
                         value={selectedDocId}
                         onChange={(e) => onChangeDocFilter(e.target.value)}
-                        className="bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 font-mono text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
+                        className="w-full sm:w-auto sm:max-w-[16rem] bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 sm:py-1 font-mono text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
                     >
                         <option value="">all documents ({documents.length})</option>
                         {documents.map((doc) => (
@@ -149,7 +160,7 @@ export default function ChunkExplorer({
                         value={searchQuery}
                         onChange={(e) => onChangeSearch(e.target.value)}
                         placeholder="Filter chunk text or section..."
-                        className="bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none w-52"
+                        className="w-full sm:w-52 bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5 sm:py-1 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
                     />
                 </div>
             </div>
@@ -164,18 +175,78 @@ export default function ChunkExplorer({
                     No vector chunks match the current filter.
                 </div>
             ) : (
-                <div className="overflow-x-auto">
+                <>
+                {/* Phone layout: one card per chunk. The table below takes over from md up. */}
+                <ul className="md:hidden divide-y divide-zinc-800/80">
+                    {shownChunks.map((chunk) => {
+                        const withinBudget = chunk.token_estimate <= MAX_MODEL_TOKENS;
+                        return (
+                            <li key={chunkKey(chunk)} className="p-4 space-y-2.5">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <p className="truncate font-mono text-xs text-zinc-200">
+                                            <span className="text-zinc-400">#{chunk.chunk_index}</span>{" "}
+                                            {chunk.doc_id}
+                                        </p>
+                                        {chunk.section && (
+                                            <p className="mt-0.5 line-clamp-2 break-words text-xs text-zinc-300">
+                                                {chunk.section}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <span
+                                        className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-xs ${
+                                            withinBudget
+                                                ? "bg-zinc-900 border-zinc-800 text-zinc-300"
+                                                : "bg-amber-950/50 border-amber-800 text-amber-300"
+                                        }`}
+                                    >
+                                        ~{chunk.token_estimate}/{MAX_MODEL_TOKENS}
+                                    </span>
+                                </div>
+                                <p className="line-clamp-3 break-words font-mono text-xs leading-relaxed text-zinc-400">
+                                    {chunk.snippet}
+                                </p>
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className="font-mono text-xs text-zinc-500">
+                                        {chunk.char_count} chars
+                                    </span>
+                                    <div className="flex shrink-0 items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => openChunk(chunk)}
+                                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-1.5 font-mono text-xs text-zinc-200 cursor-pointer"
+                                        >
+                                            Inspect
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => openChunkForEdit(chunk)}
+                                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-1.5 font-mono text-xs text-zinc-200 cursor-pointer"
+                                        >
+                                            Edit
+                                        </button>
+                                    </div>
+                                </div>
+                            </li>
+                        );
+                    })}
+                </ul>
+
+                {/* md and up: the snippet column shows from xl and the chars column from lg, so the
+                    table fits without sideways scrolling at common widths. */}
+                <div className="hidden md:block overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-zinc-800 bg-zinc-900/20 font-mono text-[11px] uppercase text-zinc-400">
-                                <th className="py-2.5 px-5 font-medium">Index</th>
+                                <th className="py-2.5 px-4 lg:px-5 font-medium">Index</th>
                                 <th className="py-2.5 px-4 font-medium">doc_id</th>
                                 <th className="py-2.5 px-4 font-medium">Section Header</th>
-                                <th className="py-2.5 px-4 font-medium">Text Snippet</th>
-                                <th className="py-2.5 px-4 font-medium">Chars</th>
+                                <th className="hidden xl:table-cell py-2.5 px-4 font-medium">Text Snippet</th>
+                                <th className="hidden lg:table-cell py-2.5 px-4 font-medium">Chars</th>
                                 <th className="py-2.5 px-4 font-medium">Tokens</th>
-                                <th className="py-2.5 px-5 font-medium text-right">
-                                    Inspect
+                                <th className="py-2.5 px-4 lg:px-5 font-medium text-right">
+                                    Actions
                                 </th>
                             </tr>
                         </thead>
@@ -189,22 +260,22 @@ export default function ChunkExplorer({
                                         onClick={() => openChunk(chunk)}
                                         className="hover:bg-zinc-900/30 transition-colors cursor-pointer"
                                     >
-                                        <td className="py-2.5 px-5 font-mono text-xs text-zinc-300">
+                                        <td className="py-2.5 px-4 lg:px-5 font-mono text-xs text-zinc-300">
                                             #{chunk.chunk_index}
                                         </td>
-                                        <td className="py-2.5 px-4 font-mono text-xs text-zinc-200">
+                                        <td className="py-2.5 px-4 font-mono text-xs text-zinc-200 max-w-[160px] truncate">
                                             {chunk.doc_id}
                                         </td>
                                         <td className="py-2.5 px-4 text-zinc-300 max-w-[180px] truncate">
                                             {chunk.section}
                                         </td>
-                                        <td className="py-2.5 px-4 font-mono text-xs text-zinc-400 max-w-md truncate">
+                                        <td className="hidden xl:table-cell py-2.5 px-4 font-mono text-xs text-zinc-400 max-w-md truncate">
                                             {chunk.snippet}
                                         </td>
-                                        <td className="py-2.5 px-4 font-mono text-xs text-zinc-400">
+                                        <td className="hidden lg:table-cell py-2.5 px-4 font-mono text-xs text-zinc-400">
                                             {chunk.char_count}
                                         </td>
-                                        <td className="py-2.5 px-4">
+                                        <td className="py-2.5 px-4 whitespace-nowrap">
                                             <span
                                                 className={`rounded border px-1.5 py-0.5 font-mono text-xs ${
                                                     withinBudget
@@ -215,29 +286,30 @@ export default function ChunkExplorer({
                                                 ~{chunk.token_estimate}/{MAX_MODEL_TOKENS}
                                             </span>
                                         </td>
-                                        <td className="py-2.5 px-5 text-right">
-                                            <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    openChunk(chunk);
-                                                }}
-                                                className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-200 cursor-pointer"
-                                            >
-                                                Inspect
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    openChunk(chunk);
-                                                    setDraft(chunk.text || "");
-                                                    setEditing(true);
-                                                }}
-                                                className="ml-2 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-200 cursor-pointer"
-                                            >
-                                                Edit
-                                            </button>
+                                        <td className="py-2.5 px-4 lg:px-5">
+                                            {/* nowrap + gap: the two buttons never wrap onto or over each other */}
+                                            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        openChunk(chunk);
+                                                    }}
+                                                    className="shrink-0 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-200 cursor-pointer"
+                                                >
+                                                    Inspect
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        openChunkForEdit(chunk);
+                                                    }}
+                                                    className="shrink-0 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-200 cursor-pointer"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 );
@@ -245,10 +317,11 @@ export default function ChunkExplorer({
                         </tbody>
                     </table>
                 </div>
+                </>
             )}
 
             {/* Pagination Footer */}
-            <div className="border-t border-zinc-800 px-5 py-3 bg-zinc-900/40 flex items-center justify-between font-mono text-xs text-zinc-400">
+            <div className="border-t border-zinc-800 px-4 sm:px-5 py-3 bg-zinc-900/40 flex flex-wrap items-center justify-between gap-2 font-mono text-xs text-zinc-400">
                 <span>
                     page {page} of {totalPages} • {total} total chunks
                 </span>
@@ -275,16 +348,16 @@ export default function ChunkExplorer({
             {/* Chunk Inspection Modal */}
             {activeChunk && (
                 <div
-                    className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+                    className="fixed inset-0 z-50 bg-black/75 flex items-end sm:items-center justify-center p-0 sm:p-4"
                     onClick={closeChunk}
                 >
                     <div
-                        className="w-full max-w-2xl rounded border border-zinc-800 bg-zinc-950 overflow-hidden"
+                        className="w-full max-w-2xl max-h-[92dvh] overflow-y-auto rounded-t sm:rounded border border-zinc-800 bg-zinc-950"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="border-b border-zinc-800 px-5 py-3.5 flex items-center justify-between bg-zinc-900/40">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-mono text-xs font-semibold text-zinc-100">
+                        <div className="sticky top-0 z-10 border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex items-start justify-between gap-3 bg-zinc-900">
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                <span className="break-all font-mono text-xs font-semibold text-zinc-100">
                                     {activeChunk.doc_id}
                                 </span>
                                 <span className="rounded bg-zinc-900 border border-zinc-800 px-2 py-0.5 font-mono text-xs text-zinc-300">
@@ -298,15 +371,15 @@ export default function ChunkExplorer({
                                 type="button"
                                 onClick={closeChunk}
                                 disabled={saving}
-                                className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-300 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+                                className="shrink-0 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-2.5 py-1 font-mono text-xs text-zinc-300 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
                             >
                                 Close
                             </button>
                         </div>
 
-                        <div className="p-5 space-y-3">
-                            <div className="flex items-center justify-between font-mono text-xs text-zinc-400">
-                                <span>section: {activeChunk.section}</span>
+                        <div className="p-4 sm:p-5 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 font-mono text-xs text-zinc-400">
+                                <span className="break-words">section: {activeChunk.section}</span>
                                 <span>
                                     {activeChunk.char_count} chars • {activeChunk.word_count} words
                                 </span>
@@ -370,7 +443,7 @@ export default function ChunkExplorer({
                                 </pre>
                             )}
 
-                            <div className="flex items-center justify-between pt-1 font-mono text-xs text-zinc-500">
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 font-mono text-xs text-zinc-500">
                                 <span>embedding: BAAI/bge-small-en-v1.5 (384 dims)</span>
                                 {!editing && (
                                     <button

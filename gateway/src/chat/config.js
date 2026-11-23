@@ -47,7 +47,7 @@ function getChatConfig(env = process.env) {
         historyMaxMessages: intFromEnv(env, "CHAT_HISTORY_MAX_MESSAGES", 8, { max: 12 }),
         // Origins for tenants that have no allowed-origins list of their own. There is no built-in
         // default: when WIDGET_DEFAULT_ALLOWED_ORIGINS is unset or empty, such tenants reject every
-        // browser origin. Local-development values belong in .env, not in code.
+        // browser origin. Local-development values belong in .env.dev, not in code.
         defaultAllowedOrigins: listFromEnv(env, "WIDGET_DEFAULT_ALLOWED_ORIGINS", []),
     };
 }

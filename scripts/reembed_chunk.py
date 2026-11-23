@@ -5,7 +5,7 @@ Usage:
     The new chunk text is read from STDIN as JSON: {"text": "..."} (never from argv, so it cannot
     leak into process listings or hit argument-length limits).
 
-Environment (process environment first, then .env in the project root):
+Environment (process environment first, then .env.dev in the project root):
     MONGODB_URI (required), MONGODB_DB_NAME, MONGODB_COLLECTION_NAME (default doc_vectors),
     EMBEDDING_MODEL_NAME (default BAAI/bge-small-en-v1.5, the model used at ingestion).
 
@@ -46,10 +46,11 @@ def edit_chunk(tenant_id: str, doc_id: str, chunk_index: int, text: str, db_name
     """Loads the ingestion embedder (same model as uploads) and applies the edit."""
     from src.rag.ingestor import RAGDocumentIngestor
 
+    # Keep library prints off stdout: the last stdout line must be the JSON result.
     with contextlib.redirect_stdout(sys.stderr):
         ingestor = RAGDocumentIngestor(
             db_name=(db_name or os.environ.get("MONGODB_DB_NAME") or None),
-            env_file=PROJECT_ROOT / ".env",
+            env_file=PROJECT_ROOT / ".env.dev",
         )
         try:
             stored = reembed_chunk(ingestor.collection, ingestor.model, tenant_id, doc_id, chunk_index, text)

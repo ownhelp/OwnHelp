@@ -213,6 +213,7 @@ describe("POST /api/chat (public widget endpoint)", () => {
             assert.equal(payload.query, "What is your return policy?");
             assert.deepEqual(payload.agent_config, {
                 system_prompt: "You are Tenant A support.",
+                core_policy: "",
                 agent_tone: "warm",
                 temperature: 0.35,
                 max_context_chunks: 3,
@@ -224,6 +225,7 @@ describe("POST /api/chat (public widget endpoint)", () => {
             await (await post(valid({ tenant_id: "tenant_default" }))).text();
             assert.deepEqual(setBackendCalls()[0].payload.agent_config, {
                 system_prompt: "",
+                core_policy: "",
                 agent_tone: "",
                 temperature: 0.2,
                 max_context_chunks: 4,
@@ -297,9 +299,9 @@ describe("POST /api/chat (public widget endpoint)", () => {
         });
 
         test("405 for other methods and 404 for unknown sub-paths", async () => {
-            const get = await fetch(`${baseUrl}/api/chat`);
-            await assertError(get, 405, "method_not_allowed");
-            assert.equal(get.headers.get("allow"), "POST, OPTIONS");
+            const put = await fetch(`${baseUrl}/api/chat`, { method: "PUT" });
+            await assertError(put, 405, "method_not_allowed");
+            assert.equal(put.headers.get("allow"), "GET, POST, OPTIONS");
             await assertError(await fetch(`${baseUrl}/api/chat/other`, { method: "POST" }), 404, "not_found");
         });
     });

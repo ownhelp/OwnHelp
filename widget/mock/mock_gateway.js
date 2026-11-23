@@ -2,7 +2,8 @@
  * Mock Orchestration Gateway implementing chat and contact submission as specified in
  * widget/API_CONTRACT.md. It exists so the widget can be developed and tested without
  * MongoDB, llama.cpp or the real gateway. It performs no retrieval and no generation.
- * Like the real gateway, it sends reply text without document sources or retrieval metadata. Follow-up capability is issued for messages containing "human".
+ * Like the real gateway, it sends reply text without document sources or retrieval metadata.
+ * It does not implement GET /api/chat (the recording-notice lookup), so the widget sees no notice.
  *
  * It mirrors the real gateway's input rules (gateway/src/routes/chat.js) so widget tests cannot
  * pass against requests the real gateway rejects: session_id must be 16 to 128 characters of
@@ -25,6 +26,7 @@
  *   "cutoff"    -> SSE stream that closes without a `done` event
  *   "nostream"  -> single JSON body instead of SSE
  *   "slow"      -> slower token cadence
+ *   "human"     -> escalation reply that also issues a follow_up capability (token + contact details)
  */
 import { fileURLToPath } from "node:url";
 import cors from "cors";
@@ -103,7 +105,8 @@ export function createMockApp({ tokenDelayMs = 25, allowedOrigins } = {}) {
     app.use(cors({ origin: true, methods: ["POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
     app.set("json spaces", 4);
 
-    // Demo-only capability store: only what is needed to enforce scoping and first-submission-wins.
+    // Demo-only capability store (in memory, never expires): maps a follow_up token to its
+    // tenant + session so the contact route can enforce scoping and first-submission-wins.
     const capabilities = new Map();
     app.post("/api/chat/contact", express.json({ limit: CONTACT_BODY_LIMIT }), (req, res) => {
         const body = req.body || {};

@@ -15,9 +15,11 @@ Arguments:
                         Requires --document-parser structured.
     --execute           Required to write. Without --inspect-only or --execute the script exits.
 
-Environment (.env in the project root, or the process environment):
+Environment (.env.dev in the project root, or the process environment):
     MONGODB_URI (required with --execute; placeholder credentials are rejected),
-    MONGODB_TRAINING_DB_NAME (default capstone_dev; used for the default five tenants),
+    MONGODB_TRAINING_DB_NAME (required when --tenant-dir is not given, for the default five
+    tenants; there is no fallback, so a missing value fails instead of writing to production;
+    .env.dev.example sets it to capstone_dev),
     MONGODB_DB_NAME (default rag_knowledge_base; used with --tenant-dir),
     MONGODB_COLLECTION_NAME (default doc_vectors), EMBEDDING_MODEL_NAME.
 
@@ -35,8 +37,8 @@ from dotenv import load_dotenv
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-# Load environment variables from project root .env
-load_dotenv(project_root / ".env")
+# Load environment variables from the project root .env.dev (the root .env is the Docker stack's).
+load_dotenv(project_root / ".env.dev")
 
 TENANT_MAPPINGS = {
     "cinder_and_salt": "data/cinder_and_salt",
@@ -93,7 +95,7 @@ def main():
     mongo_uri = os.getenv("MONGODB_URI")
     if not mongo_uri or "<username>" in mongo_uri or "<password>" in mongo_uri:
         print("Error: MONGODB_URI is not configured with valid credentials.")
-        print("Please edit the .env file in the project root and replace the placeholder credentials:")
+        print("Please edit the .env.dev file in the project root and replace the placeholder credentials:")
         print("  MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/?retryWrites=true&w=majority")
         sys.exit(1)
 

@@ -4,7 +4,8 @@
  * Purpose: let an administrator upload a Markdown/JSON document, list documents and inspect the
  * stored text and vector chunks for their own tenant. Embedding and chunking are Python work, so
  * uploads are staged on disk and handed to scripts/ingest_uploaded_document.py; this keeps the
- * embedding model out of the Node process and reuses the one ingestion implementation.
+ * embedding model out of the Node process and reuses the one ingestion implementation. Editing a
+ * single chunk (PUT .../chunks/:docId/:chunkIndex) works the same way via scripts/reembed_chunk.py.
  *
  * Security: every route resolves its tenant through authorizeTenantAccess, so a tenant id in the
  * URL, query or form can never widen access. Uploaded file names are sanitized and prefixed, only
@@ -36,6 +37,7 @@ const UPLOAD_STAGING_DIR =
 
 fs.mkdirSync(UPLOAD_STAGING_DIR, { recursive: true });
 
+// basename() drops any directory part (path traversal) and the regex limits the name to safe characters.
 function sanitizeFilename(filename) {
     return path
         .basename(filename || "document.md")
@@ -118,6 +120,8 @@ function resolveSafePresetSourcePath(tenantId, docId, ext) {
     return candidatePath;
 }
 
+// Decides whether a stored document was Markdown or JSON, so the viewer can show it correctly.
+// Order: explicit format, then the preset source file on disk, then name/content heuristics.
 function inferFormat(docId, explicitFormat, sampleText, tenantId) {
     if (explicitFormat === "md" || explicitFormat === "json") {
         return explicitFormat;
@@ -261,8 +265,10 @@ function defaultPythonIngestionRunner({
     });
 }
 
+// Only these worker stage names are forwarded to the dashboard's progress stream.
 const NDJSON_STAGES = new Set(["parsing", "embedding", "writing"]);
 
+// The dashboard opts in to streamed progress with Accept: application/x-ndjson; other clients get one JSON body.
 function wantsNdjson(req) {
     return String(req.get("accept") || "")
         .toLowerCase()
@@ -285,6 +291,7 @@ function safeStreamErrorMessage(error, tempFilePath) {
 
 let activeIngestionRunner = defaultPythonIngestionRunner;
 
+// Test hooks: swap the Python worker for a fake so tests never spawn a process (see file header).
 function setIngestionRunner(runner) {
     activeIngestionRunner = runner || defaultPythonIngestionRunner;
 }
@@ -296,6 +303,7 @@ function resetIngestionRunner() {
 // Mirrors src/rag/reembed.py MAX_CHUNK_CHARS; the worker re-validates, this just fails fast.
 const MAX_CHUNK_TEXT_CHARS = 8000;
 const CHUNK_EDIT_TIMEOUT_MS = 120000;
+// Each edit loads the embedding model in a fresh process, so concurrency is capped to protect the host.
 const MAX_CONCURRENT_CHUNK_EDITS = 2;
 let chunkEditsInFlight = 0;
 

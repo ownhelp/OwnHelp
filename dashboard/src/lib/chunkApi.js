@@ -1,8 +1,9 @@
 /**
- * Gateway client for manual chunk editing. Same conventions as lib/api.js (credentials included,
- * X-Requested-With header, errors thrown with status and code); kept in its own module so the
- * edit call can be added without touching the shared client. The tenant id goes in the URL only to
- * name the resource: the gateway authorizes it against the session and takes the tenant from there.
+ * Gateway client for manual chunk editing. Same request conventions as lib/api.js (credentials
+ * included, X-Requested-With header), kept in its own module so the edit call could be added
+ * without touching the shared client. Unlike api.js, errors carry only `status` (no `code`) and a
+ * 401 does not trigger the global sign-out handler. The tenant id goes in the URL only to name the
+ * resource: the gateway authorizes it against the session.
  */
 
 const GATEWAY_BASE_URL =

@@ -22,6 +22,9 @@ const { getTicketLogsCollection } = require("../db/mongo");
 const SAVE_TIMEOUT_MS = 5000;
 const MAX_CITED_SOURCES = 20;
 
+// Deterministic and one-way: the same (tenant, session) always maps to the same ticket, and the
+// raw session id cannot be recovered from the id shown to admins. \u0000 separates the two parts
+// so ("ab", "c") and ("a", "bc") cannot collide.
 function buildEscalationTicketId(tenantId, sessionId) {
     const digest = crypto.createHash("sha256").update(`${tenantId}\u0000${sessionId}`).digest("hex");
     return `TKT-CHAT-${digest.slice(0, 12).toUpperCase()}`;
@@ -111,19 +114,21 @@ async function saveEscalationTicket(ticket, { timeoutMs = SAVE_TIMEOUT_MS } = {}
     const result = await withTimeout(
         (async () => {
             const collection = await getTicketLogsCollection();
+            // $set refreshes the transcript and re-opens the ticket; $setOnInsert holds the fields
+            // that must survive a repeat escalation (id, creation time, admin notes, contact).
             return collection.updateOne(
-            { tenant_id: tenantId, ticket_id: ticketId },
-            {
-                $set: { ...latest, status: "pending_review" },
-                $setOnInsert: {
-                    ticket_id: ticketId,
-                    tenant_id: tenantId,
-                    created_at: createdAt,
-                    admin_notes,
-                    customer_contact,
+                { tenant_id: tenantId, ticket_id: ticketId },
+                {
+                    $set: { ...latest, status: "pending_review" },
+                    $setOnInsert: {
+                        ticket_id: ticketId,
+                        tenant_id: tenantId,
+                        created_at: createdAt,
+                        admin_notes,
+                        customer_contact,
+                    },
                 },
-            },
-            { upsert: true, maxTimeMS: timeoutMs }
+                { upsert: true, maxTimeMS: timeoutMs }
             );
         })(),
         timeoutMs

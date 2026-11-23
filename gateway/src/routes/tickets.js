@@ -25,6 +25,8 @@ const VALID_ESCALATION_REASONS = new Set([
 ]);
 const TICKET_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{1,63}$/;
 
+// Keeps only non-empty string messages from an admin-supplied transcript; role defaults to
+// "customer" and a missing timestamp to now, matching what chat/escalation.js writes.
 function normalizeMessages(rawMessages) {
     if (!Array.isArray(rawMessages)) return [];
     const nowIso = new Date().toISOString();

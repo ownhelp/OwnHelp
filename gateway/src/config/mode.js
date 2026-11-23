@@ -32,6 +32,8 @@ function validateAppMode(rawMode) {
     return trimmed;
 }
 
+// Standard mode falls back to rag_knowledge_base (the final-demo database, AGENTS.md section 3) when
+// MONGODB_DB_NAME is unset; preset_training has no fallback and must name its own database.
 function resolveRuntimeConfig(env = process.env) {
     const appMode = validateAppMode(env.APP_MODE);
 

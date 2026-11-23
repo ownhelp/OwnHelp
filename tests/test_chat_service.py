@@ -470,7 +470,7 @@ class EnvLoadingTests(unittest.TestCase):
         self.assertFalse(load_env(Path(tempfile.gettempdir()) / "definitely-missing-dir" / ".env"))
 
     def test_default_env_file_is_the_repository_root_env(self):
-        self.assertEqual(ENV_FILE.name, ".env")
+        self.assertEqual(ENV_FILE.name, ".env.dev")
         self.assertEqual(ENV_FILE.parent, Path(__file__).resolve().parents[1])
 
 

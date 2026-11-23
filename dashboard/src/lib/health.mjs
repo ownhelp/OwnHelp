@@ -60,6 +60,7 @@ export function describeVectorIndex(health) {
 export function nextHealthPollDelay(health, failed = false) {
     if (failed) return HEALTH_POLL_FAST_MS;
     const index = describeVectorIndex(health);
+    // Only an explicit false counts as "model not ready"; a gateway that omits the field is not polled fast.
     const ollamaReady = !health || health.ollama_ready !== false;
     return index && index.ready && ollamaReady ? HEALTH_POLL_SLOW_MS : HEALTH_POLL_FAST_MS;
 }

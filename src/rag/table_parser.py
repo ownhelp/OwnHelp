@@ -1,8 +1,7 @@
-"""
-Modular Table Parser & Linearizer for RAG Pipelines and API Gateways.
+"""Markdown/JSON table parser and linearizer for the RAG ingestion pipeline.
 
-Provides robust parsing, extraction, and linearization of Markdown and JSON tables
-into high-density semantic text formats optimized for vector search and LLM context.
+Parses, extracts and linearizes Markdown and JSON tables into dense semantic text suited to
+vector search and LLM context.
 
 Why tables get special handling: embedding models and small LLMs handle pipe-delimited rows poorly,
 because a cell value ("30 days") is separated from its column header ("Return window") and the
@@ -13,7 +12,8 @@ Inputs: Markdown text (``linearize_tables``) or a list of dict records (``linear
 Outputs: text with table rows rewritten as ``- Header: value | Header: value`` lines (mode
 "replace"), or the original table followed/preceded by a "*Table Summary:*" block (modes "augment"
 / "prepend"); ``ParsedTable`` objects for structured access.
-Callers: ``src/rag/ingestor.py`` (legacy parser, mode "augment") and the API gateway for tabular input.
+Callers: ``src/rag/ingestor.py`` (legacy parser, mode "augment"). ``linearize_records`` and
+``to_row_chunks`` have no production caller; they are exercised by ``tests/test_table_parser.py``.
 """
 
 from __future__ import annotations

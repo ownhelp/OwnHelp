@@ -10,8 +10,14 @@ import React, { useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
-import { DEFAULT_AGENT_TONE, TONE_PRESETS } from "@/lib/agentDefaults.mjs";
+import {
+    DEFAULT_AGENT_TONE,
+    TONE_PRESETS,
+    buildDefaultBusinessInstructions as buildGeneratedPrompt,
+} from "@/lib/agentDefaults.mjs";
 
+// Display-only preview of the tenant_id the gateway will derive from the business name; the gateway
+// decides the real value (and handles collisions), so this is never sent.
 function previewSlug(businessName) {
     if (!businessName) return "your_business_id";
     const slug = businessName
@@ -25,18 +31,7 @@ function previewSlug(businessName) {
     return slug.length >= 2 ? slug : "your_business_id";
 }
 
-function buildGeneratedPrompt({ businessName, industry, contactEmail }) {
-    const cleanName = (businessName || "your business").trim();
-    const cleanIndustry = (industry || "").trim();
-    const cleanEmail = (contactEmail || "").trim();
-    const sectorPhrase = cleanIndustry ? ` (${cleanIndustry})` : "";
-    const escalationPhrase = cleanEmail
-        ? ` If the answer is not verified by the provided context, state that clearly and offer to escalate the inquiry to ${cleanEmail}.`
-        : " If the answer is not verified by the provided context, state that clearly and offer to escalate the inquiry to a human support specialist.";
-
-    return `You are a customer support agent for ${cleanName}${sectorPhrase}. Answer customer questions strictly using the provided context chunks.${escalationPhrase}`;
-}
-
+/** Page component, no props; AppShell sends already-signed-in visitors away from this route. */
 export default function SignupOnboardingPage() {
     const router = useRouter();
     const { appMode, signup } = useAuth();
@@ -60,6 +55,7 @@ export default function SignupOnboardingPage() {
         [businessName]
     );
 
+    // The public support email falls back to the admin's login email when left blank.
     const effectiveSupportEmail = (contactEmail || email).trim();
 
     const autoSystemPrompt = useMemo(
@@ -124,7 +120,7 @@ export default function SignupOnboardingPage() {
     }
 
     return (
-        <div className="min-h-screen bg-zinc-950 text-zinc-100 py-10 px-4 flex justify-center">
+        <div className="min-h-screen bg-zinc-950 text-zinc-100 py-6 sm:py-10 px-4 flex justify-center">
             <div className="w-full max-w-3xl space-y-6">
                 {/* Top Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-zinc-800 pb-4">
@@ -142,7 +138,7 @@ export default function SignupOnboardingPage() {
                     </div>
                     <Link
                         href="/login"
-                        className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 self-start sm:self-auto"
+                        className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-2 sm:py-1.5 text-xs text-zinc-300 self-start sm:self-auto"
                     >
                         Existing account? Sign in
                     </Link>
@@ -162,8 +158,8 @@ export default function SignupOnboardingPage() {
 
                 <form onSubmit={handleSignupSubmit} className="space-y-6">
                     {/* Step 1: Administrator Credentials */}
-                    <section className="rounded border border-zinc-800 bg-zinc-900/30 p-5 space-y-4">
-                        <div className="border-b border-zinc-800/80 pb-2.5 flex items-center justify-between">
+                    <section className="rounded border border-zinc-800 bg-zinc-900/30 p-4 sm:p-5 space-y-4">
+                        <div className="border-b border-zinc-800/80 pb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                             <h2 className="text-sm font-semibold text-zinc-100">
                                 1. Administrator Credentials
                             </h2>
@@ -238,8 +234,8 @@ export default function SignupOnboardingPage() {
                     </section>
 
                     {/* Step 2: Business Identity ("Get to Know You") */}
-                    <section className="rounded border border-zinc-800 bg-zinc-900/30 p-5 space-y-4">
-                        <div className="border-b border-zinc-800/80 pb-2.5 flex items-center justify-between">
+                    <section className="rounded border border-zinc-800 bg-zinc-900/30 p-4 sm:p-5 space-y-4">
+                        <div className="border-b border-zinc-800/80 pb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                             <h2 className="text-sm font-semibold text-zinc-100">
                                 2. Get to Know Your Business
                             </h2>
@@ -343,7 +339,7 @@ export default function SignupOnboardingPage() {
                     </section>
 
                     {/* Step 3: Live Tenant ID & System Prompt Preview */}
-                    <section className="rounded border border-zinc-800 bg-zinc-900/30 p-5 space-y-4">
+                    <section className="rounded border border-zinc-800 bg-zinc-900/30 p-4 sm:p-5 space-y-4">
                         <div className="border-b border-zinc-800/80 pb-2.5 flex flex-wrap items-center justify-between gap-2">
                             <div>
                                 <h2 className="text-sm font-semibold text-zinc-100">
@@ -362,7 +358,7 @@ export default function SignupOnboardingPage() {
                         </div>
 
                         <div>
-                            <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-1.5">
                                 <label
                                     htmlFor="signup-system-prompt"
                                     className="font-mono text-xs uppercase text-zinc-400"
@@ -426,17 +422,17 @@ export default function SignupOnboardingPage() {
                         </div>
                     </section>
 
-                    <div className="flex items-center justify-end gap-3">
+                    <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-3">
                         <Link
                             href="/login"
-                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-4 py-2 text-xs font-medium text-zinc-300"
+                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-4 py-3 sm:py-2 text-center text-xs font-medium text-zinc-300"
                         >
                             Cancel
                         </Link>
                         <button
                             type="submit"
                             disabled={submitting}
-                            className="rounded bg-zinc-100 hover:bg-white px-5 py-2 text-xs font-medium text-zinc-900 disabled:opacity-50 cursor-pointer transition-colors"
+                            className="rounded bg-zinc-100 hover:bg-white px-5 py-3 sm:py-2 text-xs font-medium text-zinc-900 disabled:opacity-50 cursor-pointer transition-colors"
                         >
                             {submitting
                                 ? "Provisioning Workspace..."

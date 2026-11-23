@@ -81,6 +81,17 @@ tenant before going live.
   The follow-up token is kept in memory only.
 - **Start again:** the header's **New chat** button aborts in-flight requests, clears the form and
   follow-up state, and stores a new session id. Server history and admin tickets are untouched.
+- **Recording notice:** when the business turned on conversation recording, the widget shows
+  "This conversation is recorded to improve the assistant." above the input. On first open it asks
+  `GET {apiUrl}/api/chat?tenant_id=...`; it sends `recording_notice: true` with messages only while
+  that notice is on screen, and the gateway records a turn only then. If the lookup fails, no notice
+  is shown and nothing is recorded. Older widget versions never send the flag, so they are never
+  recorded. See the [API contract](API_CONTRACT.md).
+- **Phones:** below 640px wide (or on short landscape screens) the open chat fills the screen. It
+  follows the visual viewport so the header and greeting stay visible and the input sits above the
+  on-screen keyboard, inputs are 16px (no iOS zoom), and the input is not auto-focused on touch
+  devices so the keyboard does not cover the greeting. All of this lives inside the widget's shadow
+  root; the host page is never modified.
 - Stop and Retry buttons, and fixed visitor-safe error messages, are built in.
 
 ## Local development

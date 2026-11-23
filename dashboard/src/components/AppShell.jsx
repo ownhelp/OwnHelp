@@ -29,7 +29,9 @@ export default function AppShell({ children }) {
         }
     }, [loading, authenticated, isPublicAuthRoute, router]);
 
-    // Public auth routes (/login, /signup) render their segment directly when not authenticated
+    // Public auth routes (/login, /signup) render their segment directly when not authenticated.
+    // An already-signed-in visitor sees a placeholder instead, so the form does not flash while
+    // the effect above redirects to "/".
     if (isPublicAuthRoute) {
         if (!loading && authenticated) {
             return (

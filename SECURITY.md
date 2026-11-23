@@ -16,15 +16,19 @@ Please do not open a public issue for a security problem. Report it privately th
 
 ## Secrets
 
-- `MONGODB_URI` (the Atlas connection string is a credential), `HF_TOKEN`, `CHAT_BACKEND_TOKEN` and `CHAT_FOLLOW_UP_SECRET` are read from the environment or from `.env` files. `.env` files and `*.local` files are git-ignored; only `.env.example` and `.env.compose.example` are committed, and they contain placeholders.
+- `MONGODB_URI` (the Atlas connection string is a credential), `HF_TOKEN`, `CHAT_BACKEND_TOKEN` and `CHAT_FOLLOW_UP_SECRET` are read from the environment or from `.env` files (`.env` for the Docker stack, `.env.dev` for host-run development). `.env` files and `*.local` files are git-ignored; only `.env.example` and `.env.dev.example` are committed, and they contain placeholders.
 - The browser never receives the database URI, the backend token, the follow-up secret or retrieval details. The widget and dashboard talk only to the gateway, never to MongoDB.
 - Health and error responses contain no driver errors, hostnames or connection strings.
-- `docker compose config` prints the values from `.env.compose.local`. Do not share its output.
-- `scripts/setup_stack.py` writes `.env.compose.local` with mode 0600 and never overwrites it. It takes the Atlas URI from the environment or a hidden prompt, never as a command-line argument, so it stays out of shell history.
+- `docker compose config` prints the values from `.env`. Do not share its output.
+- `scripts/setup_stack.py` writes `.env` with mode 0600 and never overwrites it. It takes the Atlas URI from the environment or a hidden prompt, never as a command-line argument, so it stays out of shell history.
 
 ## What the widget visitor can and cannot see
 
 A visitor receives the answer text, the escalation payload when a human is needed, and the follow-up form metadata. A visitor never receives retrieved chunk text, similarity scores, document ids, or system prompts. Browser chat is accepted only from the origins listed for that business. The origin check applies to browsers. A request with no `Origin` header, such as curl or a server-side client, is not blocked by it, so it is not an authentication mechanism.
+
+## Optional conversation recording
+
+Off by default and controlled per business. When a business turns it on, each chat turn is stored in `conversation_logs` (question with e-mail addresses and phone-like numbers replaced, answer, action, confidence, cited and retrieved document ids with scores, latency, settings and policy version). A turn is stored only if the business opted in **and** the widget confirmed it showed the recording notice, so visitors are told before their first message is kept. IP addresses, browser details, the raw session id, retrieved text and follow-up form contact details are not stored. Records are scoped by `tenant_id`, kept until the operator deletes them, and exported by the operator with `scripts/export_conversations.py`. The operator is responsible for telling visitors and for any consent their organization requires. Redaction is pattern-based and will not catch every personal detail a visitor types.
 
 ## Sessions and abuse controls
 

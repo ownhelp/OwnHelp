@@ -2,7 +2,8 @@
  * Bounded in-memory conversation memory for the widget, keyed by (tenant_id, session_id).
  * The tenant is part of the key, so one tenant's session id can never read another tenant's turns.
  * Nothing is persisted here; entries disappear on restart or after the idle TTL. (A conversation is
- * only written to the database when the assistant escalates it to a human; see escalation.js.)
+ * written to the database only when the assistant escalates it to a human, see escalation.js, or
+ * for a business that opted in to conversation recording, see conversationLog.js.)
  *
  * Two views of the same conversation:
  *   get()           the short recent window sent to the model as context
@@ -52,6 +53,11 @@ class SessionHistory {
         return entry.transcript.map((message) => ({ ...message }));
     }
 
+    /**
+     * Appends one exchange. `maxMessages` caps the model-facing window; the transcript keeps up to
+     * MAX_TRANSCRIPT_MESSAGES. Returns the stored assistant entry, the very object held by both views,
+     * so the caller can amend the remembered reply afterwards (see recordTurn in routes/chat.js).
+     */
     add(tenantId, sessionId, userText, assistantText, maxMessages = 8, now = Date.now()) {
         const key = this.key(tenantId, sessionId);
         const existing = this.live(tenantId, sessionId, now);
@@ -85,4 +91,4 @@ class SessionHistory {
     }
 }
 
-module.exports = { SessionHistory, MAX_TRANSCRIPT_MESSAGES };
+module.exports = { SessionHistory };

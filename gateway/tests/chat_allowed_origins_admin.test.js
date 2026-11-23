@@ -65,6 +65,11 @@ describe("allowed origins are managed through the admin tenant config API", () =
                         const found = store.find((doc) => match(doc, query));
                         if (!found) return null;
                         for (const [key, value] of Object.entries(update.$set || {})) setDotted(found, key, value);
+                        for (const key of Object.keys(update.$unset || {})) {
+                            const parts = key.split(".");
+                            const parent = parts.slice(0, -1).reduce((node, part) => node?.[part], found);
+                            if (parent) delete parent[parts[parts.length - 1]];
+                        }
                         return structuredClone(found);
                     },
                 };
@@ -107,6 +112,34 @@ describe("allowed origins are managed through the admin tenant config API", () =
         assert.equal((await putConfig("tenant_a", { contact_phone: "+1 202 555 0123 x123" })).status, 200);
         assert.equal((await putConfig("tenant_a", { contact_phone: "+x#1++" })).status, 400);
         assert.equal((await putConfig("tenant_a", { contact_phone: "" })).status, 200);
+    });
+
+    test("a tenant can override its core policy and reset it to the default", async () => {
+        const custom = "You answer questions about a personal portfolio using only the supplied documents.";
+        const saved = await putConfig("tenant_a", { agent_config: { core_policy: `  ${custom}  ` } });
+        assert.equal(saved.status, 200);
+        assert.equal(businesses[0].agent_config.core_policy, custom);
+        assert.equal(typeof (await saved.json()).assistant_policy.system_prompt, "string");
+        assert.equal((await putConfig("tenant_a", { agent_config: { core_policy: "   " } })).status, 400);
+        assert.equal((await putConfig("tenant_a", { agent_config: { core_policy: "x".repeat(8001) } })).status, 400);
+        assert.equal((await putConfig("tenant_a", { agent_config: { core_policy: 42 } })).status, 400);
+        assert.equal(businesses[0].agent_config.core_policy, custom);
+        assert.equal((await putConfig("tenant_a", { agent_config: { core_policy: null } })).status, 200);
+        assert.equal("core_policy" in businesses[0].agent_config, false);
+        assert.equal(businesses[1].agent_config.core_policy, undefined);
+    });
+
+    test("conversation recording is a strict boolean that only the tenant's own admin can set", async () => {
+        assert.equal((await putConfig("tenant_a", { record_conversations: true })).status, 200);
+        assert.equal(businesses[0].record_conversations, true);
+        for (const bad of ["true", 1, null, {}]) {
+            assert.equal((await putConfig("tenant_a", { record_conversations: bad })).status, 400, String(bad));
+        }
+        assert.equal(businesses[0].record_conversations, true);
+        assert.equal((await putConfig("tenant_a", { record_conversations: false })).status, 200);
+        assert.equal(businesses[0].record_conversations, false);
+        assert.equal(businesses[1].record_conversations, undefined);
+        assert.equal((await putConfig("tenant_b", { record_conversations: true })).status, 403);
     });
 
     test("contact validation blocks invalid API writes and normalizes international numbers", async () => {

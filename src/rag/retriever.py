@@ -41,7 +41,8 @@ class RAGRetriever:
         if env_file:
             load_dotenv(dotenv_path=env_file, override=False)
         else:
-            load_dotenv(find_dotenv(usecwd=True), override=False)
+            # ".env" is the Docker stack's file, so look for the development file by name.
+            load_dotenv(find_dotenv(".env.dev", usecwd=True), override=False)
 
         resolved_model = model_name or os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 
@@ -55,7 +56,7 @@ class RAGRetriever:
             if not resolved_uri or "<username>" in resolved_uri or "<password>" in resolved_uri:
                 raise ValueError(
                     "MongoDB connection URI is missing or contains placeholder values. "
-                    "Please configure MONGODB_URI in your .env file or pass mongo_uri to RAGRetriever."
+                    "Please configure MONGODB_URI in your .env.dev file or pass mongo_uri to RAGRetriever."
                 )
             resolved_db = db_name or os.getenv("MONGODB_DB_NAME", "rag_knowledge_base")
             resolved_collection = collection_name or os.getenv("MONGODB_COLLECTION_NAME", "doc_vectors")

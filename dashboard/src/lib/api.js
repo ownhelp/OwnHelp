@@ -1,8 +1,10 @@
 /**
  * The dashboard's only network client: every call goes to the Orchestration Gateway, never to
  * MongoDB. Requests send credentials: "include" so the gateway's session cookie is used, and the
- * X-Requested-With header (a custom header the gateway's CORS config allows). Tenant-scoped calls pass the tenant_id in
- * the URL or form data; the gateway enforces that the session may access it.
+ * X-Requested-With header (a custom header the gateway's CORS config allows). Tenant-scoped calls
+ * pass the tenant_id in the URL or form data; the gateway enforces that the session may access it.
+ * A non-2xx answer throws an Error with `status` and `code` set. Manual chunk editing lives in
+ * chunkApi.js.
  */
 
 import { readUploadStream } from "./uploadStream.mjs";

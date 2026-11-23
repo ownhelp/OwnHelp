@@ -20,6 +20,7 @@ import DocumentTable from "@/components/DocumentTable";
 import DocumentViewerModal from "@/components/DocumentViewerModal";
 import ChunkExplorer from "@/components/ChunkExplorer";
 
+/** Page component, no props. Chunk filter/search/page state lives here and is passed to ChunkExplorer. */
 export default function IngestionHubPage() {
     const {
         activeTenant,
@@ -57,6 +58,7 @@ export default function IngestionHubPage() {
         return () => clearTimeout(timer);
     }, [toast]);
 
+    // Reloads documents and the current chunk page together (Refresh/Retry buttons and after an upload).
     const refreshAllData = useCallback(
         async (tenantId, docFilter = chunkDocFilter, search = chunkSearch, page = chunkPage) => {
             if (!tenantId) return;
@@ -93,6 +95,7 @@ export default function IngestionHubPage() {
         let cancelled = false;
 
         async function loadForActiveTenant() {
+            // Deferring one microtask keeps the setState calls below out of the effect's synchronous body.
             await Promise.resolve();
             if (cancelled) return;
             setChunkDocFilter("");
@@ -157,7 +160,8 @@ export default function IngestionHubPage() {
                     setChunksData(chunkPageData);
                 }
             } catch {
-                // Handled by main error banner if needed
+                // Deliberately silent: a failed filter/page change keeps the previous rows, and the
+                // error banner (with Retry) is only set by the full reloads above.
             } finally {
                 if (!cancelled) {
                     setLoadingChunks(false);
@@ -206,6 +210,8 @@ export default function IngestionHubPage() {
         [activeTenantId, chunkDocFilter, chunkSearch, refreshAllData, showToast]
     );
 
+    // Metric-card values; the defaults (0.7 threshold, 4 chunks, 0.2 temperature) mirror the gateway's
+    // agent_config defaults and only show until the tenant's own config arrives.
     const totalVectorChunks = documents.reduce(
         (sum, doc) => sum + (Number(doc.chunk_count) || 0),
         0
@@ -225,7 +231,7 @@ export default function IngestionHubPage() {
                 <div
                     role="status"
                     aria-live="polite"
-                    className="fixed bottom-5 right-5 z-50 max-w-md"
+                    className="fixed bottom-4 sm:bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-50 sm:max-w-md"
                 >
                     <div
                         className={`rounded border p-3.5 text-sm ${
@@ -245,11 +251,11 @@ export default function IngestionHubPage() {
             )}
 
             {/* Page Header */}
-            <header className="bg-zinc-950 border-b border-zinc-800 px-6 py-4">
+            <header className="bg-zinc-950 border-b border-zinc-800 px-4 sm:px-6 py-4">
                 <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div>
-                        <div className="flex items-center gap-2.5">
-                            <h1 className="text-lg font-semibold text-zinc-100">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                            <h1 className="text-lg font-semibold text-zinc-100 break-words">
                                 {tenantsLoading
                                     ? "Loading Knowledge Base..."
                                     : activeTenant?.name || "Knowledge Base & Ingestion Hub"}
@@ -266,18 +272,18 @@ export default function IngestionHubPage() {
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="grid grid-cols-2 sm:flex items-center gap-2">
                         <button
                             type="button"
                             onClick={() => refreshAllData(activeTenantId)}
                             disabled={loadingDocs || !activeTenantId}
-                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-1.5 font-mono text-xs text-zinc-200 disabled:opacity-50 cursor-pointer"
+                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-2.5 sm:py-1.5 font-mono text-xs text-zinc-200 disabled:opacity-50 cursor-pointer"
                         >
                             Refresh
                         </button>
                         <Link
                             href="/profile"
-                            className="rounded bg-zinc-100 hover:bg-white px-3.5 py-1.5 text-xs font-medium text-zinc-900"
+                            className="rounded bg-zinc-100 hover:bg-white px-3.5 py-2.5 sm:py-1.5 text-center text-xs font-medium text-zinc-900"
                         >
                             Runtime Config
                         </Link>
@@ -286,17 +292,17 @@ export default function IngestionHubPage() {
             </header>
 
             {/* Main Workspace */}
-            <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
+            <main className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 space-y-5 sm:space-y-6">
                 {error && (
-                    <div className="rounded border border-red-900 bg-red-950/50 p-4 flex items-center justify-between gap-4 text-red-200">
+                    <div className="rounded border border-red-900 bg-red-950/50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 text-red-200">
                         <div className="text-xs">
                             <p className="font-semibold">Gateway Query Error</p>
-                            <p className="text-red-300 mt-0.5 font-mono">{error}</p>
+                            <p className="text-red-300 mt-0.5 font-mono break-words">{error}</p>
                         </div>
                         <button
                             type="button"
                             onClick={() => refreshAllData(activeTenantId)}
-                            className="rounded border border-red-800 bg-red-900 px-3 py-1 text-xs font-medium text-white hover:bg-red-800 cursor-pointer"
+                            className="shrink-0 rounded border border-red-800 bg-red-900 px-3 py-2 sm:py-1 text-xs font-medium text-white hover:bg-red-800 cursor-pointer"
                         >
                             Retry
                         </button>
@@ -304,7 +310,7 @@ export default function IngestionHubPage() {
                 )}
 
                 {/* 1. Metric Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                     <MetricCard
                         label="Ingested Documents"
                         value={documents.length}
@@ -371,7 +377,7 @@ export default function IngestionHubPage() {
                 />
             </main>
 
-            {/* Raw Document Viewer Drawer */}
+            {/* Raw Document Viewer (modal) */}
             {viewingDocId && (
                 <DocumentViewerModal
                     tenantId={activeTenantId}

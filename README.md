@@ -40,10 +40,10 @@ Full prerequisites and GPU setup are in the [deployment guide](deployment/README
 python3 scripts/setup_stack.py \
   --model-dir /absolute/path/to/model-dir \
   --model-sha256 YOUR_VERIFIED_64_CHARACTER_SHA256
-docker compose --env-file .env.compose.local up -d --wait --wait-timeout 900
+docker compose up -d --wait --wait-timeout 900
 ```
 
-`setup_stack.py` verifies the checksum, asks for your Atlas connection string at a hidden prompt (or reads `MONGODB_URI` from the environment), and writes `.env.compose.local` once. It never overwrites an existing file. Keep that file private. You can instead copy [`.env.compose.example`](.env.compose.example) and fill in every placeholder.
+`setup_stack.py` verifies the checksum, asks for your Atlas connection string at a hidden prompt (or reads `MONGODB_URI` from the environment), and writes `.env` once, which Docker Compose reads automatically (no `--env-file` flag). It never overwrites an existing file, so if you have an older development `.env`, rename it to `.env.dev` first. Keep that file private. You can instead copy [`.env.example`](.env.example) and fill in every placeholder.
 
 The first start can take a few minutes longer on a new database while Atlas builds the vector index; see [the Atlas database](deployment/README.md#the-atlas-database).
 
@@ -96,12 +96,28 @@ Create a remotely managed tunnel in Cloudflare Zero Trust and run `cloudflared` 
 
 - **Public chat address.** The path restriction exposes only the widget script and the two chat endpoints. Everything else, including the admin API, answers `404` there. The gateway serves the admin API on the same port, so do not skip the restriction.
 - **Admin addresses.** Put `admin.` and `api-admin.` in one Cloudflare Access application with an Allow policy limited to your own email (not "Everyone"). Turn on **Bypass options requests to origin** in the application's CORS settings, otherwise Access redirects the dashboard's cross-origin preflight requests. Open `https://api-admin.example.com/api/health` once in your browser and sign in, because Access issues a separate login cookie per hostname.
-- **`.env.compose.local`.** Set `TRUST_PROXY=1` (so rate limits see the real visitor address), `ALLOWED_ORIGINS` to `https://admin.example.com` (comma-separate extra origins, no spaces) and `NEXT_PUBLIC_GATEWAY_URL=https://api-admin.example.com`. The last one is baked in at build time: run `docker compose --env-file .env.compose.local build dashboard`, then `up -d --wait`.
+- **`.env`.** Set `TRUST_PROXY=1` (so rate limits see the real visitor address), `ALLOWED_ORIGINS` to `https://admin.example.com` (comma-separate extra origins, no spaces) and `NEXT_PUBLIC_GATEWAY_URL=https://api-admin.example.com`. The last one is baked in at build time: run `docker compose build dashboard`, then `up -d --wait`.
 - **Rate limit.** Add a Cloudflare rate-limiting rule for `chat.example.com` on `/api/chat` (for example 20 requests per minute per IP). The gateway's own limits are per process and in memory, and requests without an `Origin` header (such as curl) are not stopped by the origin check.
 
 Check from outside: `https://chat.example.com/api/auth/config` and `/api/health` should return `404`, and `https://admin.example.com` should redirect to the Cloudflare login.
 
 </details>
+
+## Tune the assistant and review conversations
+
+All of this is on the dashboard's Profile page. Changes apply on Save, and the Save bar stays on screen while you edit.
+
+- **Business instructions, tone, temperature, context chunks and similarity threshold.** Described in the [dashboard guide](dashboard/README.md).
+- **Core assistant policy.** The default policy (grounded answers only, escalate when unsure) is written for a small business. If it does not fit your site, click **Edit policy** and confirm the warning to replace it for your business only; **Reset to default** restores the original. The model was fine-tuned on the default wording, and a heavily rewritten policy can make a small model less reliable. Replies are still returned in the required JSON format, and promises to transfer or email on your behalf are still blocked.
+- **Set to defaults.** Resets every agent setting (instructions, policy, tone and the three numbers) to what a new business starts with. It never touches your name, contact details, origins or documents, and nothing is stored until you Save.
+- **Conversation recording (off by default).** Turn it on to keep every chat turn, not just escalated ones, for review or research. While it is on, the widget shows "This conversation is recorded to improve the assistant." A message is stored only if the business turned recording on and the widget confirmed it showed that notice, so an older cached widget is never recorded. Per message it stores the question (with e-mail addresses and phone-like numbers replaced), the answer, action, confidence, cited and retrieved document ids with scores, response time, and the settings and policy version in force, in the `conversation_logs` collection of your Atlas database. It does not store IP addresses, browser details, the visitor's session id, document text, or contact details left in the follow-up form. Records are kept until you delete them. Tell your visitors you are recording, and check whether your organization needs consent for the people you collect from.
+- **Export recorded conversations.** Read-only, from the repository root:
+
+  ```bash
+  .venv/bin/python -m scripts.export_conversations --tenant your_business_id --out ~/exports/chats.json
+  ```
+
+  Use `--format csv` (or a `.csv` name) for one row per turn, and `--since` / `--until` (UTC dates) to limit the range. The JSON holds a summary (turns, answered vs escalated, mean confidence, median latency) plus conversations grouped by session. It needs `MONGODB_URI` from `.env.dev` or your environment. Write the file outside the repository, because it contains visitors' messages. Details: [scripts/README.md](scripts/README.md).
 
 ## Your database
 
@@ -109,7 +125,7 @@ OwnHelp stores documents, embeddings, businesses and support tickets in your own
 
 ## Privacy and security
 
-The model runs on your hardware, but your documents, embeddings and tickets live in your Atlas cluster, and Cloudflare (if you use it) can see traffic passing through its tunnel. [The privacy trade-off](deployment/README.md#privacy-trade-off) explains what stays where, and [SECURITY.md](SECURITY.md) covers tenant isolation, secrets and how to report a problem.
+The model runs on your hardware, but your documents, embeddings and tickets (and, only if you turn on [conversation recording](#tune-the-assistant-and-review-conversations), recorded chat turns) live in your Atlas cluster, and Cloudflare (if you use it) can see traffic passing through its tunnel. [The privacy trade-off](deployment/README.md#privacy-trade-off) explains what stays where, and [SECURITY.md](SECURITY.md) covers tenant isolation, secrets and how to report a problem.
 
 ## More documentation
 

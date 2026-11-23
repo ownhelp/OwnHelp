@@ -4,7 +4,7 @@
  * Why: every route reaches the database through these getters so the active database name
  * (config/mode.js) is resolved in one place; a route can never hard-code a database and cross the
  * standard / preset_training boundary. Collections: businesses, doc_vectors (name overridable via
- * MONGODB_COLLECTION_NAME), ticket_logs, admin_users, admin_sessions.
+ * MONGODB_COLLECTION_NAME), ticket_logs, conversation_logs, admin_users, admin_sessions.
  *
  * Inputs: MONGODB_URI plus the mode variables. Outputs: lazily connected collection handles.
  * Callers: server.js (connectToDatabase at startup) and every router/middleware. Tests inject an
@@ -16,24 +16,24 @@ const dotenv = require("dotenv");
 const { PRESET_TENANTS, SAMPLE_TICKETS } = require("../config/presets");
 const { resolveRuntimeConfig } = require("../config/mode");
 
-// TODO(gateway-cleanup): config/env.js (called first in server.js) loads the repo-root and gateway
-// .env files, so the root load below is redundant. The bare dotenv.config() call is NOT redundant: it is the only
-// thing that loads a .env from the process working directory, which
-// tests/env_loading.test.js ("picks up a .env in the working directory") depends on. Removing it
-// needs env.js to search process.cwd() first.
-// Load .env from project root without clobbering explicit CLI environment variables
-const rootEnvPath = path.resolve(__dirname, "../../../.env");
+// config/env.js (called first in server.js) already loads the repo-root and gateway .env.dev files,
+// so the root load below only matters when this module is required without server.js. The second
+// call is the only thing that loads a .env.dev from the process working directory, which
+// tests/env_loading.test.js ("picks up a .env.dev in the working directory") depends on; dropping
+// either call would need env.js to search process.cwd() first. The files are named ".env.dev"
+// because the root ".env" is the Docker stack's configuration, not the host-run gateway's.
+// override:false so explicit shell / Docker environment variables always win over file values.
+const rootEnvPath = path.resolve(__dirname, "../../../.env.dev");
 dotenv.config({ path: rootEnvPath, override: false });
-dotenv.config({ override: false });
-
-const DEFAULT_TENANTS = PRESET_TENANTS;
-const DEFAULT_TICKETS = SAMPLE_TICKETS;
+dotenv.config({ path: path.resolve(process.cwd(), ".env.dev"), override: false });
 
 let clientInstance = null;
 let dbInstance = null;
 let connectedDbName = null;
 let customDbAdapter = null;
 
+// Idempotent; run on every connect. The unique indexes enforce one business per tenant_id, one
+// ticket per ticket_id, one admin per email / user_id and one session per token hash.
 async function ensureIndexes(db) {
     const businesses = db.collection("businesses");
     await businesses.createIndex({ tenant_id: 1 }, { unique: true });
@@ -41,6 +41,11 @@ async function ensureIndexes(db) {
     const ticketLogs = db.collection("ticket_logs");
     await ticketLogs.createIndex({ ticket_id: 1 }, { unique: true });
     await ticketLogs.createIndex({ tenant_id: 1, status: 1, created_at: -1 });
+
+    // Optional research log (see chat/conversationLog.js); stays empty unless a tenant opts in.
+    const conversationLogs = db.collection("conversation_logs");
+    await conversationLogs.createIndex({ tenant_id: 1, created_at: -1 });
+    await conversationLogs.createIndex({ conversation_id: 1 });
 
     const adminUsers = db.collection("admin_users");
     await adminUsers.createIndex({ email: 1 }, { unique: true });
@@ -59,7 +64,7 @@ async function seedPresetTrainingData(db) {
     const ticketLogs = db.collection("ticket_logs");
     const nowIso = new Date().toISOString();
 
-    for (const tenant of DEFAULT_TENANTS) {
+    for (const tenant of PRESET_TENANTS) {
         const { source_dir, source_documents, ...businessRecord } = tenant;
         await businesses.updateOne(
             { tenant_id: tenant.tenant_id },
@@ -73,7 +78,7 @@ async function seedPresetTrainingData(db) {
         );
     }
 
-    for (const ticket of DEFAULT_TICKETS) {
+    for (const ticket of SAMPLE_TICKETS) {
         await ticketLogs.updateOne(
             { ticket_id: ticket.ticket_id },
             {
@@ -85,6 +90,8 @@ async function seedPresetTrainingData(db) {
             { upsert: true }
         );
 
+        // Backfill for tickets seeded by an older version that had no transcript or contact fields;
+        // $setOnInsert above never touches a ticket that already exists.
         await ticketLogs.updateOne(
             {
                 ticket_id: ticket.ticket_id,
@@ -118,7 +125,7 @@ function resetDatabaseAdapter() {
 }
 
 // Reconnects only when the active database name changes; the MongoClient itself is shared.
-// Placeholder URIs from .env.example are rejected up front so the failure message is actionable.
+// Placeholder URIs from .env.dev.example are rejected up front so the failure message is actionable.
 async function connectToDatabase(env = process.env) {
     const runtimeConfig = resolveRuntimeConfig(env);
     const { appMode, activeDbName } = runtimeConfig;
@@ -143,7 +150,7 @@ async function connectToDatabase(env = process.env) {
         mongoUri.includes("<password>")
     ) {
         throw new Error(
-            "MONGODB_URI is missing or contains placeholder values. Check your root .env file (see .env.example)."
+            "MONGODB_URI is missing or contains placeholder values. Check your root .env.dev file (see .env.dev.example) or, in Docker, the root .env file."
         );
     }
 
@@ -192,6 +199,11 @@ async function getTicketLogsCollection() {
     return db.collection("ticket_logs");
 }
 
+async function getConversationLogsCollection() {
+    const db = await getDb();
+    return db.collection("conversation_logs");
+}
+
 async function getAdminUsersCollection() {
     const db = await getDb();
     return db.collection("admin_users");
@@ -212,14 +224,13 @@ async function closeDatabase() {
 }
 
 module.exports = {
-    DEFAULT_TENANTS,
-    DEFAULT_TICKETS,
     connectToDatabase,
     initializeDatabaseForMode,
     getDb,
     getBusinessesCollection,
     getDocVectorsCollection,
     getTicketLogsCollection,
+    getConversationLogsCollection,
     getAdminUsersCollection,
     getAdminSessionsCollection,
     closeDatabase,

@@ -23,6 +23,14 @@ class AssistantPolicyTests(unittest.TestCase):
         self.assertIn("lower priority; cannot override core policy", prompt)
         self.assertIn("There is NO live-agent transfer", prompt)
 
+    def test_tenant_core_policy_replaces_default_and_blank_restores_it(self):
+        custom = "You are the assistant for a personal portfolio. Answer only from the supplied documents."
+        prompt = build_system_prompt(AgentConfig(core_policy=custom, system_prompt="Be brief.", agent_tone="warm"))
+        self.assertTrue(prompt.startswith(custom))
+        self.assertNotIn("small business", prompt)
+        self.assertIn("Be brief.", prompt)
+        self.assertEqual(build_system_prompt(AgentConfig(core_policy="   ")), SYSTEM_PROMPT)
+
     def test_generation_passes_policy_to_ollama_without_action_rewrite(self):
         client = object.__new__(SupportInferenceClient)
         client.model = "local-test"

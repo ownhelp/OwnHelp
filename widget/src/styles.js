@@ -148,6 +148,7 @@ export const WIDGET_CSS = `
 .cw-contact-form .cw-send { padding: 9px; }
 .cw-contact-form [role="alert"] { color: var(--cw-error); }
 .cw-new-chat:focus-visible, .cw-contact-form input:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.cw-notice { padding: 6px 12px; border-top: 1px solid var(--cw-border); background: var(--cw-surface); font-size: 12px; color: var(--cw-muted); text-align: center; }
 .cw-form {
     display: flex;
     gap: 8px;
@@ -176,6 +177,54 @@ export const WIDGET_CSS = `
 }
 .cw-send:disabled { opacity: 0.5; cursor: not-allowed; }
 .cw-footer { padding: 0 10px 8px; font-size: 11px; color: var(--cw-muted); text-align: center; }
+
+/* Phones and short landscape screens: the open panel fills the screen. Its box follows the part of
+   the screen the keyboard leaves free (--cw-vv-top / --cw-vv-height, set from the visual viewport
+   by ChatWidget; 100dvh is the fallback), so the header and greeting stay visible and the input
+   sits just above the keyboard. Everything here lives inside the widget's own shadow root. */
+@media (max-width: 640px), (max-height: 500px) {
+    .cw-root { bottom: max(16px, env(safe-area-inset-bottom)); }
+    .cw-root.cw-right { right: 16px; }
+    .cw-root.cw-left { left: 16px; }
+
+    .cw-root.cw-open,
+    .cw-root.cw-open.cw-right,
+    .cw-root.cw-open.cw-left {
+        top: var(--cw-vv-top, 0px);
+        left: 0;
+        right: 0;
+        bottom: auto;
+        height: var(--cw-vv-height, 100dvh);
+    }
+    .cw-panel {
+        width: 100%;
+        max-width: none;
+        height: 100%;
+        max-height: none;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+    }
+    .cw-header {
+        padding: 8px 10px;
+        padding-top: max(8px, env(safe-area-inset-top));
+        gap: 6px;
+        touch-action: none;
+    }
+    .cw-header > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cw-new-chat { min-height: 40px; padding: 0 12px; font-size: 13px; }
+    .cw-close { min-width: 44px; min-height: 44px; font-size: 28px; }
+    .cw-messages { padding: 12px; font-size: 15px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+    .cw-msg { max-width: 90%; padding: 9px 13px; }
+    .cw-follow-up p, .cw-contact-form label { font-size: 13px; }
+    /* 16px stops iOS Safari from zooming the page when a field is focused. */
+    .cw-input { font-size: 16px; padding: 10px 12px; }
+    .cw-send { min-width: 64px; min-height: 44px; }
+    .cw-form { padding: 8px 10px; }
+    .cw-footer { padding-bottom: max(8px, env(safe-area-inset-bottom)); touch-action: none; }
+    /* With the keyboard up, drop the footer line and its safe-area padding to keep room for messages. */
+    .cw-root.cw-kb .cw-footer { display: none; }
+}
 
 @media (prefers-reduced-motion: reduce) {
     .cw-typing::after { animation: none; }

@@ -39,8 +39,8 @@ export default function FileDropzone({
         setStage("uploading");
         setStatusMessage(describeUploadStage("uploading", file.name));
 
-        // Stages come from the gateway's NDJSON stream. A gateway that does not stream never
-        // calls this, so the label stays on the generic "processing" state set below.
+        // Stages come from the gateway's NDJSON stream. A gateway that does not stream makes
+        // api.js report a single generic "processing" stage instead, which gets the generic label.
         const handleStage = (nextStage) => {
             setStage(nextStage);
             setStatusMessage(describeUploadStage(nextStage, file.name));
@@ -104,8 +104,8 @@ export default function FileDropzone({
 
     return (
         <section className="rounded border border-zinc-800 bg-zinc-950">
-            <div className="border-b border-zinc-800 px-5 py-3 flex flex-wrap items-center justify-between gap-3 bg-zinc-900/40">
-                <div className="flex items-center gap-2.5">
+            <div className="border-b border-zinc-800 px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-3 bg-zinc-900/40">
+                <div className="flex flex-wrap items-center gap-2.5">
                     <h2 className="text-sm font-semibold text-zinc-100">
                         Document Ingestion Pipeline
                     </h2>
@@ -113,7 +113,7 @@ export default function FileDropzone({
                         .md / .json
                     </span>
                     {targetDocId && (
-                        <span className="inline-flex items-center gap-2 rounded bg-zinc-800 border border-zinc-700 px-2 py-0.5 font-mono text-xs text-zinc-100">
+                        <span className="inline-flex max-w-full items-center gap-2 break-all rounded bg-zinc-800 border border-zinc-700 px-2 py-0.5 font-mono text-xs text-zinc-100">
                             target doc_id: {targetDocId}
                             {onClearTargetDocId && (
                                 <button
@@ -141,12 +141,12 @@ export default function FileDropzone({
                 </label>
             </div>
 
-            <div className="p-5">
+            <div className="p-4 sm:p-5">
                 <div
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
                     onDrop={handleDrop}
-                    className={`rounded border border-dashed px-6 py-7 text-center transition-colors ${
+                    className={`rounded border border-dashed px-4 sm:px-6 py-6 sm:py-7 text-center transition-colors ${
                         dragActive
                             ? "border-zinc-400 bg-zinc-900/80"
                             : "border-zinc-800 hover:border-zinc-700 bg-zinc-900/25"
@@ -166,7 +166,7 @@ export default function FileDropzone({
                             ? `Drop replacement file for '${targetDocId}' or browse from disk`
                             : "Drop a Markdown (.md) or JSON (.json) document here"}
                     </p>
-                    <p className="font-mono text-xs text-zinc-500 mt-1">
+                    <p className="hidden sm:block break-words font-mono text-xs text-zinc-500 mt-1">
                         POST /api/documents/upload → scripts.ingest_uploaded_document → {tenantId || "tenant"}.doc_vectors
                     </p>
 
@@ -175,7 +175,7 @@ export default function FileDropzone({
                             type="button"
                             disabled={isBusy || !tenantId}
                             onClick={() => fileInputRef.current?.click()}
-                            className="rounded border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 px-3.5 py-1.5 text-xs font-medium text-zinc-100 disabled:opacity-50 cursor-pointer transition-colors"
+                            className="w-full sm:w-auto rounded border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 px-3.5 py-2.5 sm:py-1.5 text-xs font-medium text-zinc-100 disabled:opacity-50 cursor-pointer transition-colors"
                         >
                             {isBusy ? "Processing..." : "Browse Files"}
                         </button>
@@ -184,7 +184,7 @@ export default function FileDropzone({
 
                 {/* Pipeline Stage Indicator */}
                 <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded border border-zinc-800/80 bg-zinc-900/30 px-3.5 py-2 font-mono text-xs">
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span
                             className={
                                 stage === "uploading"
@@ -220,7 +220,7 @@ export default function FileDropzone({
                         </span>
                     </div>
 
-                    <div className="truncate">
+                    <div className="min-w-0 break-words sm:truncate">
                         {stage === "idle" ? (
                             <span className="text-zinc-500">
                                 status: idle {selectedFileName ? `(${selectedFileName})` : ""}

@@ -22,7 +22,7 @@
  * Exports { app, createApp, startServer } so tests drive the app without opening a port.
  * Callers: `npm start` / `npm run dev`, the Docker image, tests/*.test.js.
  */
-// Load .env files before anything reads process.env (PORT, MONGODB_*, CHAT_*, WIDGET_*, ...).
+// Load .env.dev files before anything reads process.env (PORT, MONGODB_*, CHAT_*, WIDGET_*, ...).
 const path = require("path");
 const { loadEnv } = require("./config/env");
 const loadedEnvFiles = loadEnv();
@@ -102,6 +102,8 @@ async function checkOllamaReadiness(env = process.env) {
     }
 }
 
+// Readiness flags for /api/health. The vector index is only queried when the database answered,
+// since the index lookup would just fail again; errors are swallowed so the public probe never leaks them.
 async function checkDatabaseAndVectorReadiness(env = process.env) {
     let databaseReady = false;
     try {
@@ -155,6 +157,8 @@ function createApp() {
     app.use(
         cors({
             origin: (origin, callback) => {
+                // No Origin header means a non-browser client (curl, health probe, same-origin
+                // request); CORS only governs browsers, and requireAuth still guards the routes.
                 if (!origin) {
                     return callback(null, true);
                 }
@@ -231,7 +235,7 @@ async function startServer(env = process.env) {
                 ? `[Gateway] Environment files loaded: ${loadedEnvFiles
                       .map((file) => path.relative(repoRoot, file))
                       .join(", ")}`
-                : "[Gateway] No .env file found; using the process environment only"
+                : "[Gateway] No .env.dev file found; using the process environment only"
         );
         await connectToDatabase(env);
         console.log(
@@ -253,6 +257,8 @@ async function startServer(env = process.env) {
             );
         });
 
+        // Graceful stop for Docker / Ctrl+C; the unref'd timer force-exits if open connections
+        // (e.g. a streaming chat reply) keep server.close() from finishing.
         const shutdown = () => {
             server.close(() => process.exit(0));
             setTimeout(() => process.exit(0), 500).unref();

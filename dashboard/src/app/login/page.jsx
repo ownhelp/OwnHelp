@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
+/** Page component, no props. On success it navigates to "/" itself rather than waiting for AppShell. */
 export default function LoginPage() {
     const router = useRouter();
     const {
@@ -61,7 +62,7 @@ export default function LoginPage() {
             <div className="w-full max-w-md space-y-6">
                 {/* Header */}
                 <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                         <span className="font-mono text-xs uppercase tracking-wider text-zinc-400">
                             Support Admin Console
                         </span>
@@ -95,7 +96,7 @@ export default function LoginPage() {
 
                 {/* Standard Email/Password Form (Shown in standard mode) */}
                 {!isPresetMode && (
-                    <div className="rounded border border-zinc-800 bg-zinc-900/30 p-6">
+                    <div className="rounded border border-zinc-800 bg-zinc-900/30 p-4 sm:p-6">
                         <form
                             onSubmit={handleStandardLogin}
                             className="space-y-4"
@@ -143,13 +144,13 @@ export default function LoginPage() {
                             <button
                                 type="submit"
                                 disabled={submitting}
-                                className="w-full rounded bg-zinc-100 hover:bg-white px-4 py-2 text-xs font-medium text-zinc-900 disabled:opacity-50 cursor-pointer transition-colors"
+                                className="w-full rounded bg-zinc-100 hover:bg-white px-4 py-3 sm:py-2 text-xs font-medium text-zinc-900 disabled:opacity-50 cursor-pointer transition-colors"
                             >
                                 {submitting ? "Signing in..." : "Sign In"}
                             </button>
                         </form>
 
-                        <div className="mt-5 pt-4 border-t border-zinc-800/80 flex items-center justify-between text-xs">
+                        <div className="mt-5 pt-4 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
                             <span className="text-zinc-400">
                                 New business deployment?
                             </span>
@@ -163,10 +164,10 @@ export default function LoginPage() {
                     </div>
                 )}
 
-                {/* Quick Demo Login Buttons (Shown ONLY when server APP_MODE=preset_training) */}
+                {/* Quick Demo Login Buttons (only when the gateway reports preset_training with demo login enabled) */}
                 {isPresetMode && (
-                    <div className="rounded border border-zinc-800 bg-zinc-900/30 p-5 space-y-3">
-                        <div className="flex items-center justify-between">
+                    <div className="rounded border border-zinc-800 bg-zinc-900/30 p-4 sm:p-5 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                             <span className="font-mono text-xs uppercase text-zinc-300">
                                 Quick Demo Login (No Password)
                             </span>

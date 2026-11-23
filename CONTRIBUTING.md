@@ -6,14 +6,14 @@ Requires Python 3.14+, [uv](https://docs.astral.sh/uv/), Node.js/npm and Ollama.
 
 ```bash
 uv sync
-cp .env.example .env
+cp .env.dev.example .env.dev
 npm install --prefix gateway
 npm install --prefix dashboard
 npm install --prefix widget
 npm run build --prefix widget
 ```
 
-Edit `.env` using the comments in `.env.example`. Secrets and targets (`MONGODB_URI`, `MONGODB_DB_NAME`, `HF_TOKEN` and so on) come from the environment or `.env`, never from code. Never commit `.env`, `.env.compose.local` or any credential. See [Running the services without Docker](#running-the-services-without-docker) below.
+Edit `.env.dev` using the comments in `.env.dev.example`. Secrets and targets (`MONGODB_URI`, `MONGODB_DB_NAME`, `HF_TOKEN` and so on) come from the environment or `.env.dev`, never from code. The root `.env` is a different file: it is the Docker stack's configuration, written by `scripts/setup_stack.py` and read automatically by `docker compose`. Never commit `.env`, `.env.dev` or any credential. See [Running the services without Docker](#running-the-services-without-docker) below.
 
 ## Running the services without Docker
 
@@ -39,7 +39,7 @@ The database is chosen entirely by environment variables, never hardcoded.
 | `capstone_dev` | Development, training and evaluation across the five mock tenants: `cinder_and_salt`, `harbor_view`, `iron_and_oak`, `kettle_and_loom`, `northstar_auto` |
 | `rag_knowledge_base` | The demo database, holding only the held-out demo business. This is also the default when `MONGODB_DB_NAME` is unset. |
 
-Set `MONGODB_URI` and `MONGODB_DB_NAME` in `.env`. Both databases use the same collections (`businesses`, `doc_vectors`) and the same `vector_index` (384 dimensions, cosine, filters on `tenant_id` and `doc_id`), with `BAAI/bge-small-en-v1.5` embeddings.
+Set `MONGODB_URI` and `MONGODB_DB_NAME` in `.env.dev`. Both databases use the same collections (`businesses`, `doc_vectors`) and the same `vector_index` (384 dimensions, cosine, filters on `tenant_id` and `doc_id`), with `BAAI/bge-small-en-v1.5` embeddings.
 
 ## Document ingestion from the command line
 
@@ -93,7 +93,7 @@ npm run lint --prefix dashboard
 npm test --prefix widget
 ```
 
-These suites are offline and mocked. Tests that use local stub HTTP servers need permission to bind loopback sockets. They do not replace a full Docker integration test or a model-quality evaluation. Which tests need a database or model, if any, is listed in the [tests guide](tests/README.md). If you changed Compose files, also run `docker compose --env-file .env.compose.example config -q`.
+These suites are offline and mocked. Tests that use local stub HTTP servers need permission to bind loopback sockets. They do not replace a full Docker integration test or a model-quality evaluation. Which tests need a database or model, if any, is listed in the [tests guide](tests/README.md). If you changed Compose files, also run `docker compose --env-file .env.example config -q`.
 
 ## Things not to change
 
@@ -104,11 +104,7 @@ These suites are offline and mocked. Tests that use local stub HTTP servers need
 
 Every open item is marked in the code or here with a greppable tag. List them all with `grep -rnE "TODO\(" --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=.next .`.
 
-In the code:
-
-- `TODO(gateway-cleanup)`: the bare `dotenv.config()` call in `gateway/src/db/mongo.js` is the only thing that loads a `.env` from the process working directory. Make `config/env.js` search `process.cwd()` first, then drop both `dotenv` calls in `mongo.js` (`tests/env_loading.test.js` covers the behavior).
-
-Not tied to one place in the code:
+There are no open items tagged in the code. Not tied to one place in the code:
 
 - `TODO(live-verification)`: three checks still need a logged-in dashboard session and are listed as a manual checklist in [`deployment/README.md`](deployment/README.md): a real dashboard document upload (the real subprocess path for upload progress, `defaultPythonIngestionRunner`, is only unit-tested with fakes), the first-ingest delay on a fresh vector index, and the one-time model re-import. Also try a real chunk edit against Atlas, since `scripts/reembed_chunk.py` has only been tested with fakes.
 - `TODO(repo-cleanup)`: delete obsolete branches on the OwnHelp repository (for example `backup-post-project-cleanup` and the old data branches) once they are no longer needed.

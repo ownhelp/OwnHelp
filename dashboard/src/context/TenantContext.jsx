@@ -18,12 +18,18 @@ import { useAuth } from "@/context/AuthContext";
 
 const TenantContext = createContext(null);
 
+// Must stay identical to getStorageKey in AuthContext, which writes the same keys on login/logout.
 function getStorageKey(appMode) {
     return appMode === "preset_training"
         ? "capstone_demo_active_tenant_id"
         : "capstone_active_tenant_id";
 }
 
+/**
+ * Provides { tenants, activeTenantId, activeTenant, setActiveTenantId, updateTenantInList,
+ * refreshTenants, loading, error }. Must sit inside AuthProvider; it re-syncs whenever the session
+ * changes (sessionVersion).
+ */
 export function TenantProvider({ children }) {
     const {
         authenticated,
@@ -44,6 +50,8 @@ export function TenantProvider({ children }) {
 
     const userTenantId = user?.tenant_id || "";
 
+    // Stores the list and picks the active tenant: the user's own tenant wins, then the remembered
+    // choice, then the first entry. An empty list clears the remembered choice.
     const applyAuthorizedTenantsList = useCallback(
         (list, primaryUserTenantId = "") => {
             const safeList = Array.isArray(list) ? list : [];
@@ -103,6 +111,7 @@ export function TenantProvider({ children }) {
         let cancelled = false;
 
         async function syncTenantsWithSession() {
+            // Deferring one microtask keeps the setState calls below out of the effect's synchronous body.
             await Promise.resolve();
             if (cancelled) return;
 

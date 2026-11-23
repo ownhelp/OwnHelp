@@ -20,6 +20,11 @@ const STATUS_FILTERS = [
     { key: "flagged", label: "Flagged" },
 ];
 
+/**
+ * Page component, no props. All tickets are fetched once per tenant (status "all"); the status
+ * filter, search box and the count badges are then computed client-side, so switching filters needs
+ * no request and the counts always cover the whole queue.
+ */
 export default function TicketsPage() {
     const {
         activeTenant,
@@ -47,6 +52,8 @@ export default function TicketsPage() {
         return () => clearTimeout(timer);
     }, [toast]);
 
+    // Manual reload (Refresh/Retry). Keeps the current filters, unlike the tenant-change effect below,
+    // which also resets them.
     const loadTickets = useCallback(async (tenantId) => {
         if (!tenantId) return;
         setLoading(true);
@@ -68,6 +75,7 @@ export default function TicketsPage() {
         let cancelled = false;
 
         async function initTenantTickets() {
+            // Deferring one microtask keeps the setState calls below out of the effect's synchronous body.
             await Promise.resolve();
             if (cancelled) return;
             setStatusFilter("all");
@@ -204,7 +212,7 @@ export default function TicketsPage() {
                 <div
                     role="status"
                     aria-live="polite"
-                    className="fixed bottom-5 right-5 z-50 max-w-md"
+                    className="fixed bottom-4 sm:bottom-5 left-4 right-4 sm:left-auto sm:right-5 z-50 sm:max-w-md"
                 >
                     <div
                         className={`rounded border p-3.5 text-sm ${
@@ -224,11 +232,11 @@ export default function TicketsPage() {
             )}
 
             {/* Page Header */}
-            <header className="bg-zinc-950 border-b border-zinc-800 px-6 py-4">
+            <header className="bg-zinc-950 border-b border-zinc-800 px-4 sm:px-6 py-4">
                 <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div>
-                        <div className="flex items-center gap-2.5">
-                            <h1 className="text-lg font-semibold text-zinc-100">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                            <h1 className="text-lg font-semibold text-zinc-100 break-words">
                                 {tenantsLoading
                                     ? "Loading Ticket Review Queue..."
                                     : "Ticket Review Queue"}
@@ -249,18 +257,18 @@ export default function TicketsPage() {
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="grid grid-cols-2 sm:flex items-center gap-2">
                         <button
                             type="button"
                             onClick={() => loadTickets(activeTenantId)}
                             disabled={loading || !activeTenantId}
-                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-1.5 font-mono text-xs text-zinc-200 disabled:opacity-50 cursor-pointer"
+                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-2.5 sm:py-1.5 font-mono text-xs text-zinc-200 disabled:opacity-50 cursor-pointer"
                         >
                             Refresh
                         </button>
                         <Link
                             href="/profile"
-                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200"
+                            className="rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 px-3 py-2.5 sm:py-1.5 text-center text-xs font-medium text-zinc-200"
                         >
                             Runtime Thresholds
                         </Link>
@@ -268,17 +276,17 @@ export default function TicketsPage() {
                 </div>
             </header>
 
-            <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
+            <main className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 space-y-5 sm:space-y-6">
                 {error && (
-                    <div className="rounded border border-red-900 bg-red-950/50 p-4 flex items-center justify-between gap-4 text-red-200">
+                    <div className="rounded border border-red-900 bg-red-950/50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 text-red-200">
                         <div className="text-xs">
                             <p className="font-semibold">Failed to load ticket logs</p>
-                            <p className="font-mono text-red-300 mt-0.5">{error}</p>
+                            <p className="font-mono text-red-300 mt-0.5 break-words">{error}</p>
                         </div>
                         <button
                             type="button"
                             onClick={() => loadTickets(activeTenantId)}
-                            className="rounded border border-red-800 bg-red-900 px-3 py-1 text-xs font-medium text-white hover:bg-red-800 cursor-pointer"
+                            className="shrink-0 rounded border border-red-800 bg-red-900 px-3 py-2 sm:py-1 text-xs font-medium text-white hover:bg-red-800 cursor-pointer"
                         >
                             Retry
                         </button>
@@ -286,7 +294,7 @@ export default function TicketsPage() {
                 )}
 
                 {/* Key Indicators */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                     <MetricCard
                         label="Total Inquiries"
                         value={totalInquiries}
@@ -309,7 +317,7 @@ export default function TicketsPage() {
 
                 {/* Filter Bar & Keyword Search */}
                 <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
+                    <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5">
                         {STATUS_FILTERS.map((item) => {
                             const active = statusFilter === item.key;
                             const count =
@@ -326,7 +334,7 @@ export default function TicketsPage() {
                                     key={item.key}
                                     type="button"
                                     onClick={() => setStatusFilter(item.key)}
-                                    className={`rounded px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer border ${
+                                    className={`rounded px-3 py-2.5 sm:py-1.5 text-xs font-medium transition-colors cursor-pointer border ${
                                         active
                                             ? "bg-zinc-100 text-zinc-900 border-zinc-100"
                                             : "bg-zinc-900 text-zinc-300 border-zinc-800 hover:border-zinc-700"
@@ -353,13 +361,13 @@ export default function TicketsPage() {
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder="Search customer inquiries or ticket ID..."
-                            className="w-full sm:w-72 bg-zinc-900 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
+                            className="w-full sm:w-72 bg-zinc-900 border border-zinc-800 rounded px-3 py-2.5 sm:py-1.5 text-xs text-zinc-100 focus:border-zinc-600 focus:outline-none"
                         />
                         {searchQuery && (
                             <button
                                 type="button"
                                 onClick={() => setSearchQuery("")}
-                                className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                                className="shrink-0 rounded border border-zinc-800 bg-zinc-900 px-3 py-2.5 sm:px-2 sm:py-1.5 font-mono text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
                             >
                                 Clear
                             </button>

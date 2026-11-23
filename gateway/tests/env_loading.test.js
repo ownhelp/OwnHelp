@@ -1,4 +1,4 @@
-// Protects: .env loading precedence (process env wins, root before gateway) and that chat settings come from it without leaking values.
+// Protects: .env.dev loading precedence (process env wins, root before gateway) and that chat settings come from it without leaking values.
 const { test, describe, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -66,9 +66,9 @@ describe("environment file loading", () => {
         assert.deepEqual(loadEnv([path.join(tmpDir, "nope.env")]), []);
     });
 
-    test("the default search order is the repository root .env, then gateway/.env", () => {
-        assert.equal(ROOT_ENV_PATH, path.resolve(__dirname, "../../.env"));
-        assert.equal(GATEWAY_ENV_PATH, path.resolve(__dirname, "../.env"));
+    test("the default search order is the repository root .env.dev, then gateway/.env.dev", () => {
+        assert.equal(ROOT_ENV_PATH, path.resolve(__dirname, "../../.env.dev"));
+        assert.equal(GATEWAY_ENV_PATH, path.resolve(__dirname, "../.env.dev"));
     });
 
     test("chat and widget settings come from a .env file, with no shell exports", () => {
@@ -107,13 +107,13 @@ describe("environment file loading", () => {
             return JSON.parse(result.stdout.trim().split("\n").pop());
         };
 
-        test("picks up a .env in the working directory with nothing passed on the command line", () => {
-            write(".env", "ENVTEST_CWD=from-dotenv\n");
+        test("picks up a .env.dev in the working directory with nothing passed on the command line", () => {
+            write(".env.dev", "ENVTEST_CWD=from-dotenv\n");
             assert.equal(probe(tmpDir).cwd, "from-dotenv");
         });
 
-        test("a variable exported in the shell still beats the .env file", () => {
-            write(".env", "ENVTEST_SHELL=from-dotenv\n");
+        test("a variable exported in the shell still beats the .env.dev file", () => {
+            write(".env.dev", "ENVTEST_SHELL=from-dotenv\n");
             assert.equal(probe(tmpDir, { ENVTEST_SHELL: "from-shell" }).shell, "from-shell");
         });
     });
